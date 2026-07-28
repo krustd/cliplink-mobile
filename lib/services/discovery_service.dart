@@ -162,7 +162,7 @@ class DiscoveryService {
                 completer.complete(DiscoveredDevice(
                   ip: ip,
                   port: 9527,
-                  name: '$ip:9527',
+                  name: '设备 ($ip)',
                 ));
                 return;
               }
