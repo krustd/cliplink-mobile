@@ -41,10 +41,6 @@ class _PinScreenState extends State<PinScreen> {
 
   Future<void> _connect() async {
     final pin = _pinController.text.trim();
-    if (pin.isEmpty) {
-      setState(() => _error = '请输入 PIN 码');
-      return;
-    }
 
     setState(() {
       _connecting = true;
@@ -80,7 +76,6 @@ class _PinScreenState extends State<PinScreen> {
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
-                // Device avatar
                 Container(
                   width: 72,
                   height: 72,
@@ -94,10 +89,7 @@ class _PinScreenState extends State<PinScreen> {
                     color: theme.colorScheme.primary,
                   ),
                 ),
-
                 const SizedBox(height: 20),
-
-                // Device info
                 Text(
                   widget.device.name,
                   style: const TextStyle(
@@ -113,10 +105,7 @@ class _PinScreenState extends State<PinScreen> {
                     fontSize: 14,
                   ),
                 ),
-
                 const SizedBox(height: 32),
-
-                // PIN label
                 Text(
                   '输入 PIN 码以连接',
                   style: TextStyle(
@@ -125,8 +114,6 @@ class _PinScreenState extends State<PinScreen> {
                   ),
                 ),
                 const SizedBox(height: 16),
-
-                // PIN input field
                 SizedBox(
                   width: 200,
                   child: TextField(
@@ -148,6 +135,7 @@ class _PinScreenState extends State<PinScreen> {
                     ],
                     onSubmitted: (_) => _connect(),
                     decoration: InputDecoration(
+                      hintText: '留空 = 无密码',
                       contentPadding: const EdgeInsets.symmetric(
                         horizontal: 16,
                         vertical: 16,
@@ -156,9 +144,7 @@ class _PinScreenState extends State<PinScreen> {
                     ),
                   ),
                 ),
-
                 const SizedBox(height: 6),
-
                 Text(
                   '输入一次后将自动记住',
                   style: TextStyle(
@@ -166,10 +152,7 @@ class _PinScreenState extends State<PinScreen> {
                     fontSize: 12,
                   ),
                 ),
-
                 const SizedBox(height: 28),
-
-                // Connect button
                 SizedBox(
                   width: 200,
                   height: 52,
