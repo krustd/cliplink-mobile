@@ -183,10 +183,8 @@ class _StatusChip extends StatelessWidget {
     final (bgColor, fgColor, icon) = switch (status) {
       SendStatus.sending =>
         (Colors.blue.shade50, Colors.blue.shade700, Icons.hourglass_top_rounded),
-      SendStatus.pasted =>
+      SendStatus.sent =>
         (Colors.green.shade50, Colors.green.shade700, Icons.check_circle_rounded),
-      SendStatus.noFocus =>
-        (Colors.red.shade50, Colors.red.shade700, Icons.error_outline_rounded),
       SendStatus.error =>
         (Colors.red.shade50, Colors.red.shade700, Icons.error_rounded),
       _ => (Colors.grey.shade100, Colors.grey.shade600, Icons.info_rounded),
