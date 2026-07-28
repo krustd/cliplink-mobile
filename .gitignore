@@ -1,0 +1,15 @@
+/build/
+/.dart_tool/
+/android/.gradle/
+/android/app/build/
+/android/local.properties
+/ios/Pods/
+/ios/.symlinks/
+/ios/Flutter/Flutter.framework
+/ios/Flutter/Flutter.podspec
+/.flutter-plugins
+/.flutter-plugins-dependencies
+/*.iml
+/.idea/
+/.metadata
+/pubspec.lock
