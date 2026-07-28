@@ -6,13 +6,17 @@ import 'package:clip_link_mobile/providers/app_state.dart';
 
 void main() {
   testWidgets('App renders device selection screen', (tester) async {
+    final appState = AppState();
     await tester.pumpWidget(
-      ChangeNotifierProvider(
-        create: (_) => AppState(),
+      ChangeNotifierProvider.value(
+        value: appState,
         child: const ClipLinkApp(),
       ),
     );
-    // Just verify the scaffold is rendered with the app bar title
+    await tester.pump();
     expect(find.byType(AppBar), findsOneWidget);
+    // Clean up timers from discovery service
+    appState.stopScan();
+    appState.dispose();
   });
 }
