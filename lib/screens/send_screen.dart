@@ -185,8 +185,6 @@ class _StatusChip extends StatelessWidget {
         (Colors.blue.shade50, Colors.blue.shade700, Icons.hourglass_top_rounded),
       SendStatus.pasted =>
         (Colors.green.shade50, Colors.green.shade700, Icons.check_circle_rounded),
-      SendStatus.clipboardOnly =>
-        (Colors.orange.shade50, Colors.orange.shade700, Icons.content_copy_rounded),
       SendStatus.noFocus =>
         (Colors.red.shade50, Colors.red.shade700, Icons.error_outline_rounded),
       SendStatus.error =>

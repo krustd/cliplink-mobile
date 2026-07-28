@@ -2,7 +2,6 @@ enum SendStatus {
   idle,
   sending,
   pasted,
-  clipboardOnly,
   noFocus,
   error,
 }
@@ -19,27 +18,18 @@ class SendResult {
   });
 
   factory SendResult.fromAck(String id, String status) {
-    switch (status) {
-      case 'pasted':
-        return SendResult(status: SendStatus.pasted, id: id, message: '已粘贴');
-      case 'clipboard_only':
-        return SendResult(
-            status: SendStatus.clipboardOnly,
-            id: id,
-            message: '已写入剪贴板');
-      default:
-        return SendResult(
-            status: SendStatus.clipboardOnly,
-            id: id,
-            message: '已写入剪贴板');
+    if (status == 'pasted') {
+      return SendResult(status: SendStatus.pasted, id: id, message: '已粘贴');
     }
+    return SendResult(status: SendStatus.pasted, id: id, message: '已粘贴');
   }
 
   factory SendResult.fromNack(String id, String status, String message) {
     switch (status) {
       case 'no_focus':
-        return SendResult(
-            status: SendStatus.noFocus, id: id, message: message);
+        return SendResult(status: SendStatus.noFocus, id: id, message: message);
+      case 'paste_error':
+        return SendResult(status: SendStatus.error, id: id, message: message);
       case 'empty':
         return SendResult(status: SendStatus.error, id: id, message: message);
       case 'too_large':
