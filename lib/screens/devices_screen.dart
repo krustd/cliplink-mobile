@@ -39,161 +39,6 @@ class _DevicesScreenState extends State<DevicesScreen> {
     );
   }
 
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-
-    return Scaffold(
-      body: CustomScrollView(
-        slivers: [
-          // ── Header ────────────────────────────────────────────
-          SliverAppBar(
-            expandedHeight: 140,
-            pinned: true,
-            flexibleSpace: FlexibleSpaceBar(
-              title: const Text(
-                'ClipLink',
-                style: TextStyle(fontWeight: FontWeight.w700, fontSize: 22),
-              ),
-              background: Container(
-                decoration: BoxDecoration(
-                  gradient: LinearGradient(
-                    begin: Alignment.topLeft,
-                    end: Alignment.bottomRight,
-                    colors: [
-                      theme.colorScheme.primary,
-                      theme.colorScheme.primary.withAlpha(200),
-                    ],
-                  ),
-                ),
-              ),
-            ),
-            actions: [
-              Consumer<AppState>(
-                builder: (_, state, _) => IconButton(
-                  icon: state.isScanning
-                      ? const SizedBox(
-                          width: 20,
-                          height: 20,
-                          child: CircularProgressIndicator(
-                            strokeWidth: 2,
-                            color: Colors.white,
-                          ),
-                        )
-                      : const Icon(Icons.refresh_rounded),
-                  tooltip: state.isScanning ? '扫描中...' : '刷新',
-                  onPressed: () {
-                    if (state.isScanning) {
-                      state.stopScan();
-                    } else {
-                      state.startScan();
-                    }
-                  },
-                ),
-              ),
-            ],
-          ),
-
-          // ── Content ───────────────────────────────────────────
-          Consumer<AppState>(
-            builder: (context, state, _) {
-              if (state.isAuthenticating) {
-                return const SliverFillRemaining(
-                  child: Center(
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        CircularProgressIndicator(),
-                        SizedBox(height: 16),
-                        Text('正在连接...',
-                            style: TextStyle(color: Colors.grey)),
-                      ],
-                    ),
-                  ),
-                );
-              }
-
-              return SliverPadding(
-                padding: const EdgeInsets.fromLTRB(20, 20, 20, 32),
-                sliver: SliverList(
-                  delegate: SliverChildListDelegate([
-                    // Error banner
-                    if (state.authError != null)
-                      _ErrorBanner(state.authError!),
-
-                    // Paired devices
-                    if (state.pairedDevices.isNotEmpty) ...[
-                      _SectionHeader(
-                        icon: Icons.link_rounded,
-                        title: '已配对',
-                        color: Colors.green,
-                      ),
-                      const SizedBox(height: 8),
-                      ...state.pairedDevices.map(
-                        (d) => _PairedCard(
-                          device: d,
-                          onTap: () async {
-                            final ok = await state.connectPaired(d);
-                            if (ok && mounted) _onConnected();
-                          },
-                        ),
-                      ),
-                      const SizedBox(height: 24),
-                    ],
-
-                    // Discovered devices
-                    _SectionHeader(
-                      icon: Icons.wifi_find_rounded,
-                      title: '发现的设备',
-                      color: theme.colorScheme.primary,
-                    ),
-                    const SizedBox(height: 8),
-                    if (state.discoveredDevices.isEmpty)
-                      _EmptyState(isScanning: state.isScanning)
-                    else
-                      ...state.discoveredDevices
-                          .where((d) =>
-                              !state.pairedDevices.any((p) => p.key == d.key))
-                          .map((d) => _DeviceCard(
-                                device: d,
-                                onTap: () => _showPin(d),
-                              )),
-
-                    const SizedBox(height: 28),
-
-                    // Manual entry
-                    _SectionHeader(
-                      icon: Icons.edit_rounded,
-                      title: '手动连接',
-                      color: Colors.orange,
-                    ),
-                    const SizedBox(height: 10),
-                    _ManualEntry(
-                      ipController: _ipController,
-                      portController: _portController,
-                      onConnect: () {
-                        final ip = _ipController.text.trim();
-                        final port =
-                            int.tryParse(_portController.text.trim()) ?? 9527;
-                        if (ip.isNotEmpty) {
-                          _showPin(DiscoveredDevice(
-                            ip: ip,
-                            port: port,
-                            name: '$ip:$port',
-                          ));
-                        }
-                      },
-                    ),
-                  ]),
-                ),
-              );
-            },
-          ),
-        ],
-      ),
-    );
-  }
-
   void _showPin(DiscoveredDevice device) {
     Navigator.push(
       context,
@@ -202,9 +47,136 @@ class _DevicesScreenState extends State<DevicesScreen> {
       ),
     );
   }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text(
+          'ClipLink',
+          style: TextStyle(fontWeight: FontWeight.w700),
+        ),
+        actions: [
+          Consumer<AppState>(
+            builder: (_, state, _) => IconButton(
+              icon: state.isScanning
+                  ? const SizedBox(
+                      width: 20,
+                      height: 20,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Icon(Icons.refresh_rounded),
+              tooltip: state.isScanning ? '扫描中...' : '刷新',
+              onPressed: () {
+                if (state.isScanning) {
+                  state.stopScan();
+                } else {
+                  state.startScan();
+                }
+              },
+            ),
+          ),
+        ],
+      ),
+      body: Consumer<AppState>(
+        builder: (context, state, _) {
+          if (state.isAuthenticating) {
+            return const Center(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  CircularProgressIndicator(),
+                  SizedBox(height: 16),
+                  Text('正在连接...', style: TextStyle(color: Colors.grey)),
+                ],
+              ),
+            );
+          }
+
+          return ListView(
+            padding: const EdgeInsets.fromLTRB(20, 16, 20, 32),
+            children: [
+              // Error banner
+              if (state.authError != null) _ErrorBanner(state.authError!),
+
+              // Paired devices
+              if (state.pairedDevices.isNotEmpty) ...[
+                _SectionHeader(
+                  icon: Icons.link_rounded,
+                  title: '已配对',
+                  color: Colors.green,
+                ),
+                const SizedBox(height: 8),
+                ...state.pairedDevices.map(
+                  (d) => _PairedCard(
+                    device: d,
+                    onTap: () async {
+                      final result = await state.connectPaired(d);
+                      if (!mounted) return;
+                      if (result == ConnectResult.success) {
+                        _onConnected();
+                      } else {
+                        final device = state.consumeNeedsPinFor();
+                        if (device != null) _showPin(device);
+                      }
+                    },
+                  ),
+                ),
+                const SizedBox(height: 24),
+              ],
+
+              // Discovered devices
+              _SectionHeader(
+                icon: Icons.wifi_find_rounded,
+                title: '发现的设备',
+                color: Theme.of(context).colorScheme.primary,
+              ),
+              const SizedBox(height: 8),
+              if (state.discoveredDevices.isEmpty)
+                _EmptyState(isScanning: state.isScanning)
+              else
+                ...state.discoveredDevices
+                    .where(
+                        (d) => !state.pairedDevices.any((p) => p.key == d.key))
+                    .map((d) => _DeviceCard(
+                          device: d,
+                          onTap: () => _showPin(d),
+                        )),
+
+              const SizedBox(height: 28),
+
+              // Manual entry
+              _SectionHeader(
+                icon: Icons.edit_rounded,
+                title: '手动连接',
+                color: Colors.orange,
+              ),
+              const SizedBox(height: 10),
+              _ManualEntry(
+                ipController: _ipController,
+                portController: _portController,
+                onConnect: () {
+                  final ip = _ipController.text.trim();
+                  final port =
+                      int.tryParse(_portController.text.trim()) ?? 9527;
+                  if (ip.isNotEmpty) {
+                    _showPin(DiscoveredDevice(
+                      ip: ip,
+                      port: port,
+                      name: '$ip:$port',
+                    ));
+                  }
+                },
+              ),
+            ],
+          );
+        },
+      ),
+    );
+  }
 }
 
-// ─── Sub-widgets ────────────────────────────────────────────────────────────
+// ─── Sub-widgets ──────────────────────────────────────────────────────────────
 
 class _SectionHeader extends StatelessWidget {
   final IconData icon;

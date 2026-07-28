@@ -8,12 +8,15 @@ import '../services/discovery_service.dart';
 import '../services/socket_service.dart';
 import '../services/storage_service.dart';
 
+enum ConnectResult { success, wrongPin }
+
 /// Central application state, managed via Provider.
 class AppState extends ChangeNotifier {
   // ── Discovery ──────────────────────────────────────────────────────────
   final DiscoveryService _discovery = DiscoveryService();
   final List<DiscoveredDevice> _discoveredDevices = [];
   bool _scanning = false;
+  Timer? _scanTimeout;
 
   List<DiscoveredDevice> get discoveredDevices => List.unmodifiable(_discoveredDevices);
   bool get isScanning => _scanning;
@@ -28,11 +31,13 @@ class AppState extends ChangeNotifier {
   String _connectedDeviceName = '';
   bool _authenticating = false;
   String? _authError;
+  DiscoveredDevice? _needsPinFor; // set when stored PIN is wrong
 
   bool get isConnected => _connected;
   String get connectedDeviceName => _connectedDeviceName;
   bool get isAuthenticating => _authenticating;
   String? get authError => _authError;
+  DiscoveredDevice? get needsPinFor => _needsPinFor;
 
   // ── Send ───────────────────────────────────────────────────────────────
   SendStatus _sendStatus = SendStatus.idle;
@@ -56,11 +61,16 @@ class AppState extends ChangeNotifier {
   }
 
   // ─── Discovery ─────────────────────────────────────────────────────────
-
   Future<void> startScan() async {
     _discoveredDevices.clear();
     _scanning = true;
     notifyListeners();
+
+    // Auto-stop after 15 seconds
+    _scanTimeout?.cancel();
+    _scanTimeout = Timer(const Duration(seconds: 15), () {
+      if (_scanning) stopScan();
+    });
 
     _discovery.devices.listen((device) {
       final idx = _discoveredDevices.indexWhere((d) => d.key == device.key);
@@ -82,19 +92,35 @@ class AppState extends ChangeNotifier {
   void stopScan() {
     _discovery.stopScan();
     _scanning = false;
+    _scanTimeout?.cancel();
+    _scanTimeout = null;
     notifyListeners();
   }
 
-  // ─── Connection ────────────────────────────────────────────────────────
-
   /// Connect to a discovered device with a PIN.
+  /// Returns true if auth succeeded, false otherwise.
   Future<bool> connectWithPin(DiscoveredDevice device, String pin) async {
-    return _connect(device.ip, device.port, device.name, pin);
+    final ok = await _connect(device.ip, device.port, device.name, pin);
+    return ok;
   }
 
   /// Connect to a paired device using its stored PIN.
-  Future<bool> connectPaired(PairedDevice device) async {
-    return _connect(device.ip, device.port, device.name, device.pin);
+  Future<ConnectResult> connectPaired(PairedDevice device) async {
+    final ok = await _connect(device.ip, device.port, device.name, device.pin);
+    if (!ok) {
+      // Stored PIN is wrong — remove from storage
+      await StorageService.removePairedDevice(device.key);
+      await _loadPaired();
+      _authError = null;
+      _needsPinFor = DiscoveredDevice(
+        ip: device.ip,
+        port: device.port,
+        name: device.name,
+      );
+      notifyListeners();
+      return ConnectResult.wrongPin;
+    }
+    return ConnectResult.success;
   }
 
   Future<bool> _connect(
@@ -149,6 +175,13 @@ class AppState extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Consume the pending PIN request and return the device info.
+  DiscoveredDevice? consumeNeedsPinFor() {
+    final d = _needsPinFor;
+    _needsPinFor = null;
+    return d;
+  }
+
   // ─── Send ──────────────────────────────────────────────────────────────
 
   /// Send text to the connected daemon.
@@ -199,6 +232,7 @@ class AppState extends ChangeNotifier {
 
   @override
   void dispose() {
+    _scanTimeout?.cancel();
     _discovery.dispose();
     _socket?.dispose();
     _responseSub?.cancel();
