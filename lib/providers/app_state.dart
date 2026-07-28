@@ -179,6 +179,12 @@ class AppState extends ChangeNotifier {
     return d;
   }
 
+  /// Remove a paired device from storage.
+  Future<void> unpair(PairedDevice device) async {
+    await StorageService.removePairedDevice(device.key);
+    await _loadPaired();
+    notifyListeners();
+  }
   // ─── Send ──────────────────────────────────────────────────────────────
 
   /// Send text to the connected daemon.

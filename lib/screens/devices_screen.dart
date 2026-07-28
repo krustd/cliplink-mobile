@@ -269,7 +269,14 @@ class _PairedCard extends StatelessWidget {
                     ],
                   ),
                 ),
-                Icon(Icons.chevron_right, color: color.shade400),
+                IconButton(
+                  icon: const Icon(Icons.close_rounded, size: 18),
+                  color: Colors.grey.shade400,
+                  tooltip: '取消配对',
+                  onPressed: () {
+                    context.read<AppState>().unpair(device);
+                  },
+                ),
               ],
             ),
           ),
