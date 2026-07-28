@@ -162,7 +162,7 @@ class DiscoveryService {
                 completer.complete(DiscoveredDevice(
                   ip: ip,
                   port: 9527,
-                  name: '设备 ($ip)',
+                  name: (json['name'] as String?) ?? '设备 ($ip)',
                 ));
                 return;
               }
