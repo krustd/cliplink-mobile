@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 import '../models/discovered_device.dart';
 
 /// UDP broadcast-based device discovery.
@@ -76,13 +77,42 @@ class DiscoveryService {
       if (_running) _tryBroadcast();
     });
   }
-
-  void _tryBroadcast() {
+  Future<void> _tryBroadcast() async {
     if (_socket == null) return;
     try {
       final data = utf8.encode(jsonEncode({'type': 'discover'}));
       _socket!.send(data, InternetAddress('255.255.255.255'), discoveryPort);
+      await _trySubnetBroadcasts(data);
     } catch (_) {}
+  }
+
+  Future<void> _trySubnetBroadcasts(List<int> data) async {
+    try {
+      final interfaces = await NetworkInterface.list();
+      for (final interface in interfaces) {
+        for (final addr in interface.addresses) {
+          if (addr.type == InternetAddressType.IPv4 && !addr.isLoopback) {
+            final subnetBroadcast = _broadcastAddress(addr);
+            if (subnetBroadcast != null) {
+              _socket?.send(data, subnetBroadcast, discoveryPort);
+            }
+          }
+        }
+      }
+    } catch (_) {}
+  }
+
+  /// Compute the subnet broadcast address for an IPv4 interface address.
+  InternetAddress? _broadcastAddress(InternetAddress addr) {
+    final raw = addr.rawAddress;
+    if (raw.length != 4) return null;
+    // Assume /24 subnet (most home LANs)
+    final broadcast = List<int>.from(raw);
+    broadcast[3] = 255;
+    return InternetAddress.fromRawAddress(
+      Uint8List.fromList(broadcast),
+      type: InternetAddressType.IPv4,
+    );
   }
 
   /// Stop scanning and release resources.
