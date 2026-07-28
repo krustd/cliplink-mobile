@@ -6,7 +6,6 @@ import '../providers/app_state.dart';
 import 'pin_screen.dart';
 import 'send_screen.dart';
 
-/// Device discovery and selection screen.
 class DevicesScreen extends StatefulWidget {
   const DevicesScreen({super.key});
 
@@ -15,8 +14,8 @@ class DevicesScreen extends StatefulWidget {
 }
 
 class _DevicesScreenState extends State<DevicesScreen> {
-  final _manualIpController = TextEditingController();
-  final _manualPortController = TextEditingController(text: '9527');
+  final _ipController = TextEditingController();
+  final _portController = TextEditingController(text: '9527');
 
   @override
   void initState() {
@@ -28,12 +27,12 @@ class _DevicesScreenState extends State<DevicesScreen> {
 
   @override
   void dispose() {
-    _manualIpController.dispose();
-    _manualPortController.dispose();
+    _ipController.dispose();
+    _portController.dispose();
     super.dispose();
   }
 
-  void _navigateToSend() {
+  void _onConnected() {
     Navigator.pushReplacement(
       context,
       MaterialPageRoute(builder: (_) => const SendScreen()),
@@ -42,216 +41,369 @@ class _DevicesScreenState extends State<DevicesScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('ClipLink - 选择设备'),
-        actions: [
-          Consumer<AppState>(
-            builder: (_, state, _) => IconButton(
-              icon: Icon(state.isScanning ? Icons.stop : Icons.refresh),
-              tooltip: state.isScanning ? '停止扫描' : '重新扫描',
-              onPressed: () {
-                if (state.isScanning) {
-                  state.stopScan();
-                } else {
-                  state.startScan();
-                }
-              },
-            ),
-          ),
-        ],
-      ),
-      body: Consumer<AppState>(
-        builder: (context, state, _) {
-          if (state.isAuthenticating) {
-            return const Center(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  CircularProgressIndicator(),
-                  SizedBox(height: 16),
-                  Text('正在连接...'),
-                ],
-              ),
-            );
-          }
+    final theme = Theme.of(context);
 
-          return ListView(
-            padding: const EdgeInsets.all(16),
-            children: [
-              // Scanning indicator
-              if (state.isScanning)
-                const Padding(
-                  padding: EdgeInsets.only(bottom: 12),
-                  child: Row(
-                    children: [
-                      SizedBox(
-                        width: 16,
-                        height: 16,
-                        child: CircularProgressIndicator(strokeWidth: 2),
-                      ),
-                      SizedBox(width: 8),
-                      Text('正在扫描局域网...'),
+    return Scaffold(
+      body: CustomScrollView(
+        slivers: [
+          // ── Header ────────────────────────────────────────────
+          SliverAppBar(
+            expandedHeight: 140,
+            pinned: true,
+            flexibleSpace: FlexibleSpaceBar(
+              title: const Text(
+                'ClipLink',
+                style: TextStyle(fontWeight: FontWeight.w700, fontSize: 22),
+              ),
+              background: Container(
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
+                    colors: [
+                      theme.colorScheme.primary,
+                      theme.colorScheme.primary.withAlpha(200),
                     ],
                   ),
                 ),
-
-              // Error display
-              if (state.authError != null)
-                Padding(
-                  padding: const EdgeInsets.only(bottom: 12),
-                  child: Container(
-                    padding: const EdgeInsets.all(12),
-                    decoration: BoxDecoration(
-                      color: Colors.red.shade50,
-                      borderRadius: BorderRadius.circular(8),
-                      border: Border.all(color: Colors.red.shade200),
-                    ),
-                    child: Row(
-                      children: [
-                        Icon(Icons.error_outline, color: Colors.red.shade700),
-                        const SizedBox(width: 8),
-                        Expanded(
-                          child: Text(
-                            state.authError!,
-                            style: TextStyle(color: Colors.red.shade700),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-
-              // Paired devices
-              if (state.pairedDevices.isNotEmpty) ...[
-                const _SectionHeader(title: '已配对设备', icon: Icons.devices),
-                ...state.pairedDevices.map((d) => _PairedDeviceTile(
-                      device: d,
-                      onTap: () async {
-                        final ok = await state.connectPaired(d);
-                        if (ok && mounted) _navigateToSend();
-                      },
-                    )),
-                const SizedBox(height: 16),
-              ],
-
-              // Discovered devices
-              const _SectionHeader(title: '发现的设备', icon: Icons.search),
-              if (state.discoveredDevices.isEmpty && !state.isScanning)
-                const Padding(
-                  padding: EdgeInsets.all(24),
-                  child: Center(
-                    child: Text(
-                      '未发现设备\n请确保电脑端已启动且在同一局域网',
-                      textAlign: TextAlign.center,
-                      style: TextStyle(color: Colors.grey),
-                    ),
-                  ),
-                ),
-              ...state.discoveredDevices
-                  .where((d) => !state.pairedDevices.any((p) => p.key == d.key))
-                  .map((d) => _DiscoveredDeviceTile(
-                        device: d,
-                        onTap: () => _showPinDialog(d),
-                      )),
-
-              const SizedBox(height: 24),
-              const Divider(),
-              const SizedBox(height: 8),
-
-              // Manual entry
-              const _SectionHeader(title: '手动连接', icon: Icons.edit),
-              const SizedBox(height: 8),
-              Row(
-                children: [
-                  Expanded(
-                    flex: 3,
-                    child: TextField(
-                      controller: _manualIpController,
-                      decoration: const InputDecoration(
-                        labelText: 'IP 地址',
-                        hintText: '192.168.1.100',
-                        border: OutlineInputBorder(),
-                        isDense: true,
-                      ),
-                      keyboardType: TextInputType.number,
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    flex: 1,
-                    child: TextField(
-                      controller: _manualPortController,
-                      decoration: const InputDecoration(
-                        labelText: '端口',
-                        border: OutlineInputBorder(),
-                        isDense: true,
-                      ),
-                      keyboardType: TextInputType.number,
-                    ),
-                  ),
-                ],
               ),
-              const SizedBox(height: 8),
-              SizedBox(
-                width: double.infinity,
-                child: ElevatedButton.icon(
+            ),
+            actions: [
+              Consumer<AppState>(
+                builder: (_, state, _) => IconButton(
+                  icon: state.isScanning
+                      ? const SizedBox(
+                          width: 20,
+                          height: 20,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2,
+                            color: Colors.white,
+                          ),
+                        )
+                      : const Icon(Icons.refresh_rounded),
+                  tooltip: state.isScanning ? '扫描中...' : '刷新',
                   onPressed: () {
-                    final ip = _manualIpController.text.trim();
-                    final port =
-                        int.tryParse(_manualPortController.text.trim()) ?? 9527;
-                    if (ip.isNotEmpty) {
-                      _showPinDialog(DiscoveredDevice(
-                        ip: ip,
-                        port: port,
-                        name: '$ip:$port',
-                      ));
+                    if (state.isScanning) {
+                      state.stopScan();
+                    } else {
+                      state.startScan();
                     }
                   },
-                  icon: const Icon(Icons.link),
-                  label: const Text('手动连接'),
                 ),
               ),
             ],
-          );
-        },
+          ),
+
+          // ── Content ───────────────────────────────────────────
+          Consumer<AppState>(
+            builder: (context, state, _) {
+              if (state.isAuthenticating) {
+                return const SliverFillRemaining(
+                  child: Center(
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        CircularProgressIndicator(),
+                        SizedBox(height: 16),
+                        Text('正在连接...',
+                            style: TextStyle(color: Colors.grey)),
+                      ],
+                    ),
+                  ),
+                );
+              }
+
+              return SliverPadding(
+                padding: const EdgeInsets.fromLTRB(20, 20, 20, 32),
+                sliver: SliverList(
+                  delegate: SliverChildListDelegate([
+                    // Error banner
+                    if (state.authError != null)
+                      _ErrorBanner(state.authError!),
+
+                    // Paired devices
+                    if (state.pairedDevices.isNotEmpty) ...[
+                      _SectionHeader(
+                        icon: Icons.link_rounded,
+                        title: '已配对',
+                        color: Colors.green,
+                      ),
+                      const SizedBox(height: 8),
+                      ...state.pairedDevices.map(
+                        (d) => _PairedCard(
+                          device: d,
+                          onTap: () async {
+                            final ok = await state.connectPaired(d);
+                            if (ok && mounted) _onConnected();
+                          },
+                        ),
+                      ),
+                      const SizedBox(height: 24),
+                    ],
+
+                    // Discovered devices
+                    _SectionHeader(
+                      icon: Icons.wifi_find_rounded,
+                      title: '发现的设备',
+                      color: theme.colorScheme.primary,
+                    ),
+                    const SizedBox(height: 8),
+                    if (state.discoveredDevices.isEmpty)
+                      _EmptyState(isScanning: state.isScanning)
+                    else
+                      ...state.discoveredDevices
+                          .where((d) =>
+                              !state.pairedDevices.any((p) => p.key == d.key))
+                          .map((d) => _DeviceCard(
+                                device: d,
+                                onTap: () => _showPin(d),
+                              )),
+
+                    const SizedBox(height: 28),
+
+                    // Manual entry
+                    _SectionHeader(
+                      icon: Icons.edit_rounded,
+                      title: '手动连接',
+                      color: Colors.orange,
+                    ),
+                    const SizedBox(height: 10),
+                    _ManualEntry(
+                      ipController: _ipController,
+                      portController: _portController,
+                      onConnect: () {
+                        final ip = _ipController.text.trim();
+                        final port =
+                            int.tryParse(_portController.text.trim()) ?? 9527;
+                        if (ip.isNotEmpty) {
+                          _showPin(DiscoveredDevice(
+                            ip: ip,
+                            port: port,
+                            name: '$ip:$port',
+                          ));
+                        }
+                      },
+                    ),
+                  ]),
+                ),
+              );
+            },
+          ),
+        ],
       ),
     );
   }
 
-  void _showPinDialog(DiscoveredDevice device) {
+  void _showPin(DiscoveredDevice device) {
     Navigator.push(
       context,
       MaterialPageRoute(
-        builder: (_) => PinScreen(
-          device: device,
-          onConnected: _navigateToSend,
+        builder: (_) => PinScreen(device: device, onConnected: _onConnected),
+      ),
+    );
+  }
+}
+
+// ─── Sub-widgets ────────────────────────────────────────────────────────────
+
+class _SectionHeader extends StatelessWidget {
+  final IconData icon;
+  final String title;
+  final Color color;
+  const _SectionHeader({
+    required this.icon,
+    required this.title,
+    required this.color,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 4),
+      child: Row(
+        children: [
+          Container(
+            padding: const EdgeInsets.all(6),
+            decoration: BoxDecoration(
+              color: color.withAlpha(30),
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: Icon(icon, size: 16, color: color),
+          ),
+          const SizedBox(width: 8),
+          Text(
+            title,
+            style: TextStyle(
+              fontWeight: FontWeight.w700,
+              fontSize: 14,
+              color: Colors.grey.shade700,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _PairedCard extends StatelessWidget {
+  final PairedDevice device;
+  final VoidCallback onTap;
+  const _PairedCard({required this.device, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: Material(
+        color: Colors.green.shade50,
+        borderRadius: BorderRadius.circular(14),
+        child: InkWell(
+          borderRadius: BorderRadius.circular(14),
+          onTap: onTap,
+          child: Padding(
+            padding: const EdgeInsets.all(14),
+            child: Row(
+              children: [
+                Container(
+                  width: 10,
+                  height: 10,
+                  decoration: const BoxDecoration(
+                    color: Colors.green,
+                    shape: BoxShape.circle,
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        device.name,
+                        style: const TextStyle(
+                          fontWeight: FontWeight.w600,
+                          fontSize: 15,
+                        ),
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        '${device.ip}:${device.port}',
+                        style: TextStyle(
+                          color: Colors.grey.shade600,
+                          fontSize: 12,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                Icon(Icons.chevron_right, color: Colors.green.shade400),
+              ],
+            ),
+          ),
         ),
       ),
     );
   }
 }
 
-// ─── Private Widgets ─────────────────────────────────────────────────────────
-
-class _SectionHeader extends StatelessWidget {
-  final String title;
-  final IconData icon;
-  const _SectionHeader({required this.title, required this.icon});
+class _DeviceCard extends StatelessWidget {
+  final DiscoveredDevice device;
+  final VoidCallback onTap;
+  const _DeviceCard({required this.device, required this.onTap});
 
   @override
   Widget build(BuildContext context) {
     return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 8),
-      child: Row(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: Card(
+        child: InkWell(
+          borderRadius: BorderRadius.circular(16),
+          onTap: onTap,
+          child: Padding(
+            padding: const EdgeInsets.all(14),
+            child: Row(
+              children: [
+                Container(
+                  width: 42,
+                  height: 42,
+                  decoration: BoxDecoration(
+                    color: Theme.of(context)
+                        .colorScheme
+                        .primary
+                        .withAlpha(25),
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  child: Icon(
+                    Icons.desktop_windows_rounded,
+                    color: Theme.of(context).colorScheme.primary,
+                    size: 22,
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        device.name,
+                        style: const TextStyle(
+                          fontWeight: FontWeight.w600,
+                          fontSize: 15,
+                        ),
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        '${device.ip}:${device.port}',
+                        style: TextStyle(
+                          color: Colors.grey.shade500,
+                          fontSize: 13,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                Icon(Icons.add_circle_outline_rounded,
+                    color: Theme.of(context).colorScheme.primary),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _EmptyState extends StatelessWidget {
+  final bool isScanning;
+  const _EmptyState({required this.isScanning});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(vertical: 40),
+      child: Column(
         children: [
-          Icon(icon, size: 18, color: Theme.of(context).colorScheme.primary),
-          const SizedBox(width: 6),
+          Icon(
+            Icons.wifi_off_rounded,
+            size: 48,
+            color: Colors.grey.shade300,
+          ),
+          const SizedBox(height: 12),
           Text(
-            title,
+            isScanning ? '正在扫描...' : '未发现设备',
             style: TextStyle(
-              fontWeight: FontWeight.w600,
-              color: Theme.of(context).colorScheme.primary,
+              color: Colors.grey.shade500,
+              fontSize: 14,
+            ),
+          ),
+          const SizedBox(height: 4),
+          Text(
+            '确保电脑已启动 cliplinkd\n且在同一局域网',
+            textAlign: TextAlign.center,
+            style: TextStyle(
+              color: Colors.grey.shade400,
+              fontSize: 12,
+              height: 1.5,
             ),
           ),
         ],
@@ -260,39 +412,96 @@ class _SectionHeader extends StatelessWidget {
   }
 }
 
-class _PairedDeviceTile extends StatelessWidget {
-  final PairedDevice device;
-  final VoidCallback onTap;
-  const _PairedDeviceTile({required this.device, required this.onTap});
+class _ErrorBanner extends StatelessWidget {
+  final String message;
+  const _ErrorBanner(this.message);
 
   @override
   Widget build(BuildContext context) {
-    return Card(
-      child: ListTile(
-        leading: const Icon(Icons.computer, color: Colors.green),
-        title: Text(device.name),
-        subtitle: Text('${device.ip}:${device.port}'),
-        trailing: const Icon(Icons.chevron_right),
-        onTap: onTap,
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 16),
+      child: Container(
+        padding: const EdgeInsets.all(14),
+        decoration: BoxDecoration(
+          color: Colors.red.shade50,
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(color: Colors.red.shade100),
+        ),
+        child: Row(
+          children: [
+            Icon(Icons.error_outline, color: Colors.red.shade600, size: 20),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Text(
+                message,
+                style: TextStyle(
+                  color: Colors.red.shade700,
+                  fontSize: 13,
+                ),
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
 }
 
-class _DiscoveredDeviceTile extends StatelessWidget {
-  final DiscoveredDevice device;
-  final VoidCallback onTap;
-  const _DiscoveredDeviceTile({required this.device, required this.onTap});
+class _ManualEntry extends StatelessWidget {
+  final TextEditingController ipController;
+  final TextEditingController portController;
+  final VoidCallback onConnect;
+
+  const _ManualEntry({
+    required this.ipController,
+    required this.portController,
+    required this.onConnect,
+  });
 
   @override
   Widget build(BuildContext context) {
     return Card(
-      child: ListTile(
-        leading: const Icon(Icons.computer, color: Colors.blue),
-        title: Text(device.name),
-        subtitle: Text('${device.ip}:${device.port}'),
-        trailing: const Icon(Icons.chevron_right),
-        onTap: onTap,
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          children: [
+            Row(
+              children: [
+                Expanded(
+                  flex: 3,
+                  child: TextField(
+                    controller: ipController,
+                    decoration: const InputDecoration(
+                      labelText: 'IP 地址',
+                      hintText: '192.168.1.100',
+                    ),
+                    keyboardType: TextInputType.number,
+                  ),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  flex: 1,
+                  child: TextField(
+                    controller: portController,
+                    decoration: const InputDecoration(
+                      labelText: '端口',
+                    ),
+                    keyboardType: TextInputType.number,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            SizedBox(
+              width: double.infinity,
+              child: ElevatedButton.icon(
+                onPressed: onConnect,
+                icon: const Icon(Icons.link_rounded, size: 18),
+                label: const Text('连接'),
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
