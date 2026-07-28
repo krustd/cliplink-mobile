@@ -2,10 +2,9 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import '../models/send_result.dart';
+enum ConnectionStatus { success, authFailed, connectionRefused }
 
 /// Manages a single TCP connection to a ClipLink daemon.
-///
-/// Handles authentication, message dispatch, heartbeat, and reconnection.
 class SocketService {
   final String host;
   final int port;
@@ -28,22 +27,13 @@ class SocketService {
 
   bool get isConnected => _socket != null && _authenticated;
 
-  SocketService({
-    required this.host,
-    required this.port,
-    required this.pin,
-  });
+  SocketService({required this.host, required this.port, required this.pin});
 
-  /// Connect, authenticate, and start heartbeat.
-  Future<bool> connect() async {
+  Future<ConnectionStatus> connect() async {
     try {
-      _socket = await Socket.connect(
-        host,
-        port,
-        timeout: const Duration(seconds: 5),
-      );
+      _socket = await Socket.connect(host, port,
+          timeout: const Duration(seconds: 5));
 
-      // Send auth
       final authMsg = jsonEncode({
         'type': 'auth',
         'pin': pin,
@@ -52,8 +42,7 @@ class SocketService {
       _socket!.write('$authMsg\n');
       await _socket!.flush();
 
-      // Wait for auth response
-      final completer = Completer<bool>();
+      final completer = Completer<ConnectionStatus>();
       StreamSubscription? sub;
 
       sub = _socket!.listen(
@@ -68,9 +57,13 @@ class SocketService {
                 _connectionController.add(true);
                 _reconnectAttempts = 0;
                 _startHeartbeat();
-                if (!completer.isCompleted) completer.complete(true);
+                if (!completer.isCompleted) {
+                  completer.complete(ConnectionStatus.success);
+                }
               } else if (json['type'] == 'auth_fail') {
-                if (!completer.isCompleted) completer.complete(false);
+                if (!completer.isCompleted) {
+                  completer.complete(ConnectionStatus.authFailed);
+                }
               } else if (_authenticated) {
                 _responseController.add(json);
               }
@@ -79,11 +72,15 @@ class SocketService {
         },
         onDone: () {
           _handleDisconnect();
-          if (!completer.isCompleted) completer.complete(false);
+          if (!completer.isCompleted) {
+            completer.complete(ConnectionStatus.connectionRefused);
+          }
         },
         onError: (e) {
           _handleDisconnect();
-          if (!completer.isCompleted) completer.complete(false);
+          if (!completer.isCompleted) {
+            completer.complete(ConnectionStatus.connectionRefused);
+          }
         },
         cancelOnError: false,
       );
@@ -93,36 +90,25 @@ class SocketService {
         onTimeout: () {
           sub?.cancel();
           _socket?.destroy();
-          return false;
+          return ConnectionStatus.connectionRefused;
         },
       );
-
       return result;
     } catch (_) {
       _handleDisconnect();
-      return false;
+      return ConnectionStatus.connectionRefused;
     }
   }
 
-  /// Send text to the daemon for pasting.
   Future<SendResult?> send(String text, String id) async {
     if (_socket == null || !_authenticated) return null;
-
     try {
-      final msg = jsonEncode({
-        'type': 'send',
-        'payload': text,
-        'id': id,
-      });
+      final msg = jsonEncode({'type': 'send', 'payload': text, 'id': id});
       _socket!.write('$msg\n');
       await _socket!.flush();
-      return null; // Response will come via the stream
+      return null;
     } catch (_) {
-      return SendResult(
-        status: SendStatus.error,
-        id: id,
-        message: '发送失败',
-      );
+      return SendResult(status: SendStatus.error, id: id, message: '发送失败');
     }
   }
 
@@ -155,15 +141,13 @@ class SocketService {
         ? (1 << _reconnectAttempts)
         : _maxReconnectDelay;
     _reconnectAttempts++;
-
     _reconnectTimer = Timer(Duration(seconds: delay), () async {
       if (_disposed) return;
       final ok = await connect();
-      if (!ok && !_disposed) _startReconnect();
+      if (ok != ConnectionStatus.success && !_disposed) _startReconnect();
     });
   }
 
-  /// Disconnect and clean up.
   void disconnect() {
     _disposed = true;
     _heartbeatTimer?.cancel();

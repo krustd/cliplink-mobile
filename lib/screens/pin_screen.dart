@@ -48,15 +48,19 @@ class _PinScreenState extends State<PinScreen> {
     });
 
     final state = context.read<AppState>();
-    final ok = await state.connectWithPin(widget.device, pin);
+    final result = await state.connectWithPin(widget.device, pin);
 
     if (!mounted) return;
-    if (ok) {
+    if (result == ConnectResult.success) {
       widget.onConnected();
     } else {
       setState(() {
         _connecting = false;
-        _error = 'PIN 码错误，请重试';
+        _error = switch (result) {
+          ConnectResult.wrongPin => 'PIN 码错误，请重试',
+          ConnectResult.connectionFailed => '无法连接，请检查服务端是否已启动',
+          _ => '连接失败',
+        };
       });
     }
   }

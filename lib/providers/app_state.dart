@@ -8,7 +8,7 @@ import '../services/discovery_service.dart';
 import '../services/socket_service.dart';
 import '../services/storage_service.dart';
 
-enum ConnectResult { success, wrongPin }
+enum ConnectResult { success, wrongPin, connectionFailed }
 
 /// Central application state, managed via Provider.
 class AppState extends ChangeNotifier {
@@ -98,33 +98,18 @@ class AppState extends ChangeNotifier {
   }
 
   /// Connect to a discovered device with a PIN.
-  /// Returns true if auth succeeded, false otherwise.
-  Future<bool> connectWithPin(DiscoveredDevice device, String pin) async {
-    final ok = await _connect(device.ip, device.port, device.name, pin);
-    return ok;
+  Future<ConnectResult> connectWithPin(DiscoveredDevice device, String pin) async {
+    return _connect(device.ip, device.port, device.name, pin, isPaired: false);
   }
 
   /// Connect to a paired device using its stored PIN.
   Future<ConnectResult> connectPaired(PairedDevice device) async {
-    final ok = await _connect(device.ip, device.port, device.name, device.pin);
-    if (!ok) {
-      // Stored PIN is wrong — remove from storage
-      await StorageService.removePairedDevice(device.key);
-      await _loadPaired();
-      _authError = null;
-      _needsPinFor = DiscoveredDevice(
-        ip: device.ip,
-        port: device.port,
-        name: device.name,
-      );
-      notifyListeners();
-      return ConnectResult.wrongPin;
-    }
-    return ConnectResult.success;
+    return _connect(device.ip, device.port, device.name, device.pin, isPaired: true, pairedKey: device.key);
   }
 
-  Future<bool> _connect(
-      String ip, int port, String name, String pin) async {
+  Future<ConnectResult> _connect(
+      String ip, int port, String name, String pin,
+      {bool isPaired = false, String? pairedKey}) async {
     _authenticating = true;
     _authError = null;
     notifyListeners();
@@ -132,35 +117,46 @@ class AppState extends ChangeNotifier {
     _socket?.dispose();
     _socket = SocketService(host: ip, port: port, pin: pin);
 
-    final ok = await _socket!.connect();
+    final status = await _socket!.connect();
     _authenticating = false;
 
-    if (ok) {
-      _connected = true;
-      _connectedDeviceName = name;
-      _authError = null;
+    switch (status) {
+      case ConnectionStatus.success:
+        _connected = true;
+        _connectedDeviceName = name;
+        _authError = null;
+        await StorageService.savePairedDevice(PairedDevice(
+          ip: ip, port: port, name: name, pin: pin,
+        ));
+        await _loadPaired();
+        _responseSub?.cancel();
+        _responseSub = _socket!.responses.listen(_onResponse);
+        notifyListeners();
+        return ConnectResult.success;
 
-      // Save pairing
-      await StorageService.savePairedDevice(PairedDevice(
-        ip: ip,
-        port: port,
-        name: name,
-        pin: pin,
-      ));
-      _loadPaired();
+      case ConnectionStatus.authFailed:
+        _connected = false;
+        _socket?.dispose();
+        _socket = null;
+        if (isPaired && pairedKey != null) {
+          await StorageService.removePairedDevice(pairedKey);
+          await _loadPaired();
+          _authError = null;
+          _needsPinFor = DiscoveredDevice(ip: ip, port: port, name: name);
+        } else {
+          _authError = 'PIN 码错误';
+        }
+        notifyListeners();
+        return ConnectResult.wrongPin;
 
-      // Listen for send responses
-      _responseSub?.cancel();
-      _responseSub = _socket!.responses.listen(_onResponse);
-    } else {
-      _connected = false;
-      _authError = '认证失败，请检查 PIN 码';
-      _socket?.dispose();
-      _socket = null;
+      case ConnectionStatus.connectionRefused:
+        _connected = false;
+        _socket?.dispose();
+        _socket = null;
+        _authError = '无法连接，请检查服务端是否已启动';
+        notifyListeners();
+        return ConnectResult.connectionFailed;
     }
-
-    notifyListeners();
-    return ok;
   }
 
   /// Disconnect from current device.
