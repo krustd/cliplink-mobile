@@ -13,7 +13,9 @@ class SocketService {
   Socket? _socket;
   bool _authenticated = false;
   bool _disposed = false;
+  String? _remoteName;
 
+  String? get remoteName => _remoteName;
   final _responseController = StreamController<Map<String, dynamic>>.broadcast();
   Stream<Map<String, dynamic>> get responses => _responseController.stream;
 
@@ -54,6 +56,7 @@ class SocketService {
               final json = jsonDecode(line.trim()) as Map<String, dynamic>;
               if (json['type'] == 'auth_ok') {
                 _authenticated = true;
+                _remoteName = json['name'] as String?;
                 _connectionController.add(true);
                 _reconnectAttempts = 0;
                 _startHeartbeat();

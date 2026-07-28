@@ -110,6 +110,7 @@ class _DevicesScreenState extends State<DevicesScreen> {
                 ...state.pairedDevices.map(
                   (d) => _PairedCard(
                     device: d,
+                    isOnline: state.discoveredDevices.any((dd) => dd.key == d.key),
                     onTap: () async {
                       final result = await state.connectPaired(d);
                       if (!mounted) return;
@@ -122,7 +123,7 @@ class _DevicesScreenState extends State<DevicesScreen> {
                     },
                   ),
                 ),
-                const SizedBox(height: 24),
+              const SizedBox(height: 24),
               ],
 
               // Discovered devices
@@ -220,14 +221,16 @@ class _SectionHeader extends StatelessWidget {
 class _PairedCard extends StatelessWidget {
   final PairedDevice device;
   final VoidCallback onTap;
-  const _PairedCard({required this.device, required this.onTap});
+  final bool isOnline;
+  const _PairedCard({required this.device, required this.onTap, required this.isOnline});
 
   @override
   Widget build(BuildContext context) {
+    final color = isOnline ? Colors.green : Colors.grey;
     return Padding(
       padding: const EdgeInsets.only(bottom: 8),
       child: Material(
-        color: Colors.green.shade50,
+        color: color.shade50,
         borderRadius: BorderRadius.circular(14),
         child: InkWell(
           borderRadius: BorderRadius.circular(14),
@@ -239,9 +242,8 @@ class _PairedCard extends StatelessWidget {
                 Container(
                   width: 10,
                   height: 10,
-                  decoration: const BoxDecoration(
-                    color: Colors.green,
-                    shape: BoxShape.circle,
+                  decoration: BoxDecoration(
+                    color: color,
                   ),
                 ),
                 const SizedBox(width: 12),
@@ -267,7 +269,7 @@ class _PairedCard extends StatelessWidget {
                     ],
                   ),
                 ),
-                Icon(Icons.chevron_right, color: Colors.green.shade400),
+                Icon(Icons.chevron_right, color: color.shade400),
               ],
             ),
           ),

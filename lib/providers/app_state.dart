@@ -123,10 +123,11 @@ class AppState extends ChangeNotifier {
     switch (status) {
       case ConnectionStatus.success:
         _connected = true;
-        _connectedDeviceName = name;
+        final daemonName = _socket?.remoteName ?? name;
+        _connectedDeviceName = daemonName;
         _authError = null;
         await StorageService.savePairedDevice(PairedDevice(
-          ip: ip, port: port, name: name, pin: pin,
+          ip: ip, port: port, name: daemonName, pin: pin,
         ));
         await _loadPaired();
         _responseSub?.cancel();
