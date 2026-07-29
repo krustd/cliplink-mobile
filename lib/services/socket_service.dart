@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import '../models/send_result.dart';
+
 enum ConnectionStatus { success, authFailed, connectionRefused }
 
 /// Manages a single TCP connection to a ClipLink daemon.
@@ -14,15 +15,20 @@ class SocketService {
   bool _authenticated = false;
   bool _disposed = false;
   String? _remoteName;
+  Set<String> _capabilities = const {};
+
   /// Buffer for incomplete lines arriving over TCP.
   String _lineBuffer = '';
 
   String? get remoteName => _remoteName;
-  final _responseController = StreamController<Map<String, dynamic>>.broadcast();
+  bool get supportsUpload => _capabilities.contains('upload-v1');
+  final _responseController =
+      StreamController<Map<String, dynamic>>.broadcast();
   Stream<Map<String, dynamic>> get responses => _responseController.stream;
 
   final _connectionController = StreamController<bool>.broadcast();
   Stream<bool> get connectionState => _connectionController.stream;
+
   /// Emits the current line buffer size (bytes received for in-flight message).
   final _progressController = StreamController<int>.broadcast();
   Stream<int> get receiveProgress => _progressController.stream;
@@ -38,8 +44,11 @@ class SocketService {
 
   Future<ConnectionStatus> connect() async {
     try {
-      _socket = await Socket.connect(host, port,
-          timeout: const Duration(seconds: 5));
+      _socket = await Socket.connect(
+        host,
+        port,
+        timeout: const Duration(seconds: 5),
+      );
 
       final authMsg = jsonEncode({
         'type': 'auth',
@@ -69,7 +78,10 @@ class SocketService {
               if (json['type'] == 'auth_ok') {
                 _authenticated = true;
                 _remoteName = json['name'] as String?;
-                _connectionController.add(true);
+                final capabilities = json['capabilities'];
+                _capabilities = capabilities is List
+                    ? capabilities.whereType<String>().toSet()
+                    : const {};
                 _reconnectAttempts = 0;
                 _startHeartbeat();
                 if (!completer.isCompleted) {
@@ -151,7 +163,11 @@ class SocketService {
   }
 
   /// Fetch clipboard content from the daemon.
-  Future<void> fetchClipboard(String contentType, {int fileIndex = 0, String id = ''}) async {
+  Future<void> fetchClipboard(
+    String contentType, {
+    int fileIndex = 0,
+    String id = '',
+  }) async {
     if (_socket == null || !_authenticated) return;
     try {
       final msg = jsonEncode({
@@ -163,6 +179,62 @@ class SocketService {
       _socket!.write('$msg\n');
       await _socket!.flush();
     } catch (_) {}
+  }
+
+  Future<bool> startUpload({
+    required String id,
+    required String kind,
+    required String filename,
+    required int sizeBytes,
+  }) {
+    return _sendJson({
+      'type': 'upload_begin',
+      'id': id,
+      'kind': kind,
+      'filename': filename,
+      'size_bytes': sizeBytes,
+    });
+  }
+
+  Future<bool> sendUploadChunk({
+    required String id,
+    required int sequence,
+    required String payloadBase64,
+  }) {
+    return _sendJson({
+      'type': 'upload_chunk',
+      'id': id,
+      'seq': sequence,
+      'payload_base64': payloadBase64,
+    });
+  }
+
+  Future<bool> finishUpload({
+    required String id,
+    required int sizeBytes,
+    required String sha256,
+  }) {
+    return _sendJson({
+      'type': 'upload_finish',
+      'id': id,
+      'size_bytes': sizeBytes,
+      'sha256': sha256,
+    });
+  }
+
+  Future<void> cancelUpload(String id) async {
+    await _sendJson({'type': 'upload_cancel', 'id': id});
+  }
+
+  Future<bool> _sendJson(Map<String, dynamic> message) async {
+    if (_socket == null || !_authenticated) return false;
+    try {
+      _socket!.write('${jsonEncode(message)}\n');
+      await _socket!.flush();
+      return true;
+    } catch (_) {
+      return false;
+    }
   }
 
   void _startHeartbeat() {
@@ -180,6 +252,7 @@ class SocketService {
 
   void _handleDisconnect() {
     _authenticated = false;
+    _capabilities = const {};
     _lineBuffer = '';
     _socket?.destroy();
     _socket = null;
@@ -208,9 +281,11 @@ class SocketService {
     _socket?.destroy();
     _socket = null;
     _authenticated = false;
+    _capabilities = const {};
     _lineBuffer = '';
     _connectionController.add(false);
   }
+
   void dispose() {
     disconnect();
     _responseController.close();

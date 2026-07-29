@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../models/send_result.dart';
+import '../models/upload_state.dart';
 import '../providers/app_state.dart';
 
 class SendScreen extends StatefulWidget {
@@ -66,9 +67,12 @@ class _SendScreenState extends State<SendScreen> {
         final sizeBytes = (info['size_bytes'] as num?)?.toInt() ?? 0;
         final width = info['width'] as int?;
         final height = info['height'] as int?;
-        final dims = (width != null && height != null) ? '$width\u00d7$height' : '';
+        final dims = (width != null && height != null)
+            ? '$width\u00d7$height'
+            : '';
         title = '获取图片';
-        body = '电脑剪贴板有图片${dims.isNotEmpty ? ' ($dims)' : ''}，大小约 ${_formatSize(sizeBytes)}，是否获取？';
+        body =
+            '电脑剪贴板有图片${dims.isNotEmpty ? ' ($dims)' : ''}，大小约 ${_formatSize(sizeBytes)}，是否获取？';
         break;
       case 'file':
         final files = info['files'] as List<dynamic>? ?? [];
@@ -158,12 +162,15 @@ class _SendScreenState extends State<SendScreen> {
         actions: [
           Consumer<AppState>(
             builder: (_, state, _) => IconButton(
-              onPressed: state.isConnected &&
+              onPressed:
+                  state.isConnected &&
+                      !state.upload.blocksOtherActions &&
                       state.clipboardStatus != ClipboardFetchStatus.querying &&
                       state.clipboardStatus != ClipboardFetchStatus.fetching
                   ? _fetchClipboard
                   : null,
-              icon: state.clipboardStatus == ClipboardFetchStatus.querying ||
+              icon:
+                  state.clipboardStatus == ClipboardFetchStatus.querying ||
                       state.clipboardStatus == ClipboardFetchStatus.fetching
                   ? const SizedBox(
                       width: 20,
@@ -191,7 +198,9 @@ class _SendScreenState extends State<SendScreen> {
             // ── Status chip ───────────────────────────────────────
             Consumer<AppState>(
               builder: (_, state, _) {
-                // Show clipboard status when active, else send status
+                if (state.upload.status != UploadStatus.idle) {
+                  return _UploadStatusChip(upload: state.upload);
+                }
                 if (state.clipboardStatus != ClipboardFetchStatus.idle) {
                   return _ClipboardStatusChip(
                     status: state.clipboardStatus,
@@ -217,6 +226,9 @@ class _SendScreenState extends State<SendScreen> {
                   color: Colors.grey.shade50,
                 ),
                 child: TextField(
+                  enabled: !context.select<AppState, bool>(
+                    (state) => state.upload.blocksOtherActions,
+                  ),
                   controller: _textController,
                   focusNode: _focusNode,
                   maxLines: null,
@@ -240,18 +252,27 @@ class _SendScreenState extends State<SendScreen> {
               builder: (context, state, _) {
                 final sending = state.sendStatus == SendStatus.sending;
                 final connected = state.isConnected;
+                final clipboardBusy =
+                    state.clipboardStatus == ClipboardFetchStatus.querying ||
+                    state.clipboardStatus == ClipboardFetchStatus.fetching;
+                final actionsEnabled =
+                    connected &&
+                    !sending &&
+                    !clipboardBusy &&
+                    !state.upload.blocksOtherActions;
 
-                // Reset dialog flag when clipboard state is cleared
+                // Reset dialog flag when clipboard state is cleared.
                 if (state.clipboardInfo == null) {
                   _dialogShown = false;
                 }
-                // Check if we need to show clipboard confirmation
+                // Check if we need to show clipboard confirmation.
                 if (state.clipboardInfo != null &&
                     state.clipboardStatus == ClipboardFetchStatus.done) {
                   final info = state.clipboardInfo!;
                   final contentType = info['content_type'] as String? ?? '';
-                  // Text ≤ 512KB was auto-fetched; other types need confirmation
-                  final needsConfirm = contentType != 'text' ||
+                  // Text ≤ 512KB was auto-fetched; other types need confirmation.
+                  final needsConfirm =
+                      contentType != 'text' ||
                       ((info['size_bytes'] as num?)?.toInt() ?? 0) > 524288;
 
                   if (needsConfirm && !_dialogShown) {
@@ -262,48 +283,57 @@ class _SendScreenState extends State<SendScreen> {
                   }
                 }
 
-                return Row(
+                return Column(
                   children: [
-                    Expanded(
-                      flex: 3,
-                      child: SizedBox(
-                        height: 54,
-                        child: ElevatedButton.icon(
-                          onPressed: connected && !sending ? _send : null,
-                          icon: sending
-                              ? const SizedBox(
-                                  width: 20,
-                                  height: 20,
-                                  child: CircularProgressIndicator(
-                                    strokeWidth: 2.5,
-                                    color: Colors.white,
-                                  ),
-                                )
-                              : const Icon(Icons.send_rounded, size: 20),
-                          label: Text(sending ? '发送中...' : '发送文本'),
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: theme.colorScheme.primary,
-                            foregroundColor: Colors.white,
-                            disabledBackgroundColor: Colors.grey.shade200,
-                            disabledForegroundColor: Colors.grey.shade400,
+                    Row(
+                      children: [
+                        Expanded(
+                          flex: 3,
+                          child: SizedBox(
+                            height: 54,
+                            child: ElevatedButton.icon(
+                              onPressed: actionsEnabled ? _send : null,
+                              icon: sending
+                                  ? const SizedBox(
+                                      width: 20,
+                                      height: 20,
+                                      child: CircularProgressIndicator(
+                                        strokeWidth: 2.5,
+                                        color: Colors.white,
+                                      ),
+                                    )
+                                  : const Icon(Icons.send_rounded, size: 20),
+                              label: Text(sending ? '发送中...' : '发送文本'),
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: theme.colorScheme.primary,
+                                foregroundColor: Colors.white,
+                                disabledBackgroundColor: Colors.grey.shade200,
+                                disabledForegroundColor: Colors.grey.shade400,
+                              ),
+                            ),
                           ),
                         ),
-                      ),
+                        const SizedBox(width: 10),
+                        SizedBox(
+                          width: 64,
+                          height: 54,
+                          child: OutlinedButton(
+                            onPressed: actionsEnabled ? _sendEnter : null,
+                            style: OutlinedButton.styleFrom(
+                              padding: EdgeInsets.zero,
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(14),
+                              ),
+                            ),
+                            child: const Icon(Icons.keyboard_return, size: 24),
+                          ),
+                        ),
+                      ],
                     ),
-                    const SizedBox(width: 10),
-                    SizedBox(
-                      width: 64,
-                      height: 54,
-                      child: OutlinedButton(
-                        onPressed: connected && !sending ? _sendEnter : null,
-                        style: OutlinedButton.styleFrom(
-                          padding: EdgeInsets.zero,
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(14),
-                          ),
-                        ),
-                        child: const Icon(Icons.keyboard_return, size: 24),
-                      ),
+                    const SizedBox(height: 10),
+                    _AttachmentPanel(
+                      state: state,
+                      enabled: connected && !sending && !clipboardBusy,
                     ),
                   ],
                 );
@@ -318,6 +348,201 @@ class _SendScreenState extends State<SendScreen> {
   }
 }
 
+class _AttachmentPanel extends StatelessWidget {
+  final AppState state;
+  final bool enabled;
+
+  const _AttachmentPanel({required this.state, required this.enabled});
+
+  @override
+  Widget build(BuildContext context) {
+    final upload = state.upload;
+    if (upload.isReady) {
+      return Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+        decoration: BoxDecoration(
+          color: Colors.blue.shade50,
+          borderRadius: BorderRadius.circular(12),
+        ),
+        child: Row(
+          children: [
+            Icon(
+              upload.kind == UploadKind.image
+                  ? Icons.image_outlined
+                  : Icons.attach_file_rounded,
+              color: Colors.blue.shade700,
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                '${upload.filename} · ${_formatByteSize(upload.totalBytes)}',
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+            TextButton(
+              onPressed: () => state.cancelUpload(),
+              child: const Text('取消'),
+            ),
+            FilledButton(
+              onPressed: () => state.startUpload(),
+              child: const Text('发送'),
+            ),
+          ],
+        ),
+      );
+    }
+
+    if (upload.status == UploadStatus.selecting ||
+        upload.status == UploadStatus.uploading) {
+      return Row(
+        children: [
+          const Expanded(child: Text('附件传输期间不能执行其他操作')),
+          if (upload.status == UploadStatus.uploading)
+            TextButton(
+              onPressed: () => state.cancelUpload(),
+              child: const Text('取消上传'),
+            ),
+        ],
+      );
+    }
+
+    if (!state.supportsUpload) {
+      return state.isConnected
+          ? const Align(
+              alignment: Alignment.centerLeft,
+              child: Text(
+                '当前电脑端版本不支持文件传输',
+                style: TextStyle(color: Colors.grey, fontSize: 12),
+              ),
+            )
+          : const SizedBox.shrink();
+    }
+
+    return Row(
+      children: [
+        Expanded(
+          child: OutlinedButton.icon(
+            onPressed: enabled ? () => state.selectImage() : null,
+            icon: const Icon(Icons.image_outlined),
+            label: const Text('发送图片'),
+          ),
+        ),
+        const SizedBox(width: 10),
+        Expanded(
+          child: OutlinedButton.icon(
+            onPressed: enabled ? () => state.selectFile() : null,
+            icon: const Icon(Icons.attach_file_rounded),
+            label: const Text('发送文件'),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _UploadStatusChip extends StatelessWidget {
+  final UploadState upload;
+
+  const _UploadStatusChip({required this.upload});
+
+  @override
+  Widget build(BuildContext context) {
+    final (bgColor, fgColor, icon) = switch (upload.status) {
+      UploadStatus.selecting || UploadStatus.uploading => (
+        Colors.blue.shade50,
+        Colors.blue.shade700,
+        Icons.upload_file_rounded,
+      ),
+      UploadStatus.ready => (
+        Colors.blue.shade50,
+        Colors.blue.shade700,
+        Icons.attach_file_rounded,
+      ),
+      UploadStatus.sent => (
+        Colors.green.shade50,
+        Colors.green.shade700,
+        Icons.check_circle_rounded,
+      ),
+      UploadStatus.error => (
+        Colors.red.shade50,
+        Colors.red.shade700,
+        Icons.error_rounded,
+      ),
+      UploadStatus.cancelled => (
+        Colors.grey.shade100,
+        Colors.grey.shade700,
+        Icons.cancel_outlined,
+      ),
+      UploadStatus.idle => (
+        Colors.grey.shade100,
+        Colors.grey.shade600,
+        Icons.info_rounded,
+      ),
+    };
+    final showProgress = upload.status == UploadStatus.uploading;
+    final message = showProgress
+        ? '${upload.filename} · ${(upload.progress * 100).toStringAsFixed(0)}%'
+        : upload.message;
+
+    return AnimatedContainer(
+      duration: const Duration(milliseconds: 250),
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+      decoration: BoxDecoration(
+        color: bgColor,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: fgColor.withAlpha(50)),
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              if (showProgress || upload.status == UploadStatus.selecting)
+                const SizedBox(
+                  width: 18,
+                  height: 18,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                )
+              else
+                Icon(icon, color: fgColor, size: 18),
+              const SizedBox(width: 8),
+              Flexible(
+                child: Text(
+                  message,
+                  style: TextStyle(
+                    color: fgColor,
+                    fontSize: 13,
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          if (showProgress) ...[
+            const SizedBox(height: 8),
+            ClipRRect(
+              borderRadius: BorderRadius.circular(4),
+              child: LinearProgressIndicator(
+                value: upload.progress,
+                minHeight: 4,
+                backgroundColor: fgColor.withAlpha(30),
+                valueColor: AlwaysStoppedAnimation<Color>(fgColor),
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+String _formatByteSize(int bytes) {
+  if (bytes < 1024) return '$bytes B';
+  if (bytes < 1024 * 1024) return '${(bytes / 1024).toStringAsFixed(1)} KB';
+  return '${(bytes / (1024 * 1024)).toStringAsFixed(1)} MB';
+}
+
 /// Animated status chip showing send result.
 class _StatusChip extends StatelessWidget {
   final SendStatus status;
@@ -330,12 +555,21 @@ class _StatusChip extends StatelessWidget {
     if (status == SendStatus.idle) return const SizedBox(height: 4);
 
     final (bgColor, fgColor, icon) = switch (status) {
-      SendStatus.sending =>
-        (Colors.blue.shade50, Colors.blue.shade700, Icons.hourglass_top_rounded),
-      SendStatus.sent =>
-        (Colors.green.shade50, Colors.green.shade700, Icons.check_circle_rounded),
-      SendStatus.error =>
-        (Colors.red.shade50, Colors.red.shade700, Icons.error_rounded),
+      SendStatus.sending => (
+        Colors.blue.shade50,
+        Colors.blue.shade700,
+        Icons.hourglass_top_rounded,
+      ),
+      SendStatus.sent => (
+        Colors.green.shade50,
+        Colors.green.shade700,
+        Icons.check_circle_rounded,
+      ),
+      SendStatus.error => (
+        Colors.red.shade50,
+        Colors.red.shade700,
+        Icons.error_rounded,
+      ),
       _ => (Colors.grey.shade100, Colors.grey.shade600, Icons.info_rounded),
     };
 
@@ -385,16 +619,26 @@ class _ClipboardStatusChip extends StatelessWidget {
     if (status == ClipboardFetchStatus.idle) return const SizedBox(height: 4);
 
     final (bgColor, fgColor, icon) = switch (status) {
-      ClipboardFetchStatus.querying || ClipboardFetchStatus.fetching =>
-        (Colors.blue.shade50, Colors.blue.shade700, Icons.cloud_download_rounded),
-      ClipboardFetchStatus.done =>
-        (Colors.green.shade50, Colors.green.shade700, Icons.check_circle_rounded),
-      ClipboardFetchStatus.error =>
-        (Colors.red.shade50, Colors.red.shade700, Icons.error_rounded),
+      ClipboardFetchStatus.querying || ClipboardFetchStatus.fetching => (
+        Colors.blue.shade50,
+        Colors.blue.shade700,
+        Icons.cloud_download_rounded,
+      ),
+      ClipboardFetchStatus.done => (
+        Colors.green.shade50,
+        Colors.green.shade700,
+        Icons.check_circle_rounded,
+      ),
+      ClipboardFetchStatus.error => (
+        Colors.red.shade50,
+        Colors.red.shade700,
+        Icons.error_rounded,
+      ),
       _ => (Colors.grey.shade100, Colors.grey.shade600, Icons.info_rounded),
     };
 
-    final showProgress = progress >= 0 && status == ClipboardFetchStatus.fetching;
+    final showProgress =
+        progress >= 0 && status == ClipboardFetchStatus.fetching;
 
     return AnimatedContainer(
       duration: const Duration(milliseconds: 250),
@@ -421,7 +665,9 @@ class _ClipboardStatusChip extends StatelessWidget {
               const SizedBox(width: 8),
               Flexible(
                 child: Text(
-                  showProgress ? '${(progress * 100).toStringAsFixed(0)}%' : message,
+                  showProgress
+                      ? '${(progress * 100).toStringAsFixed(0)}%'
+                      : message,
                   style: TextStyle(
                     color: fgColor,
                     fontSize: 13,

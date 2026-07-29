@@ -6,9 +6,13 @@ import 'package:flutter/services.dart';
 import 'package:uuid/uuid.dart';
 import 'package:gal/gal.dart';
 import 'package:path_provider/path_provider.dart';
+import 'package:crypto/crypto.dart';
+import 'package:file_picker/file_picker.dart';
+import 'package:image_picker/image_picker.dart';
 import '../models/discovered_device.dart';
 import '../models/paired_device.dart';
 import '../models/send_result.dart';
+import '../models/upload_state.dart';
 import '../services/discovery_service.dart';
 import '../services/socket_service.dart';
 import '../services/storage_service.dart';
@@ -19,6 +23,18 @@ enum ConnectResult { success, wrongPin, connectionFailed }
 /// Clipboard fetch status.
 enum ClipboardFetchStatus { idle, querying, fetching, done, error }
 
+class _DigestSink implements Sink<Digest> {
+  Digest? value;
+
+  @override
+  void add(Digest data) {
+    value = data;
+  }
+
+  @override
+  void close() {}
+}
+
 /// Central application state, managed via Provider.
 class AppState extends ChangeNotifier {
   // ── Discovery ──────────────────────────────────────────────────────────
@@ -27,7 +43,8 @@ class AppState extends ChangeNotifier {
   bool _scanning = false;
   Timer? _scanTimeout;
 
-  List<DiscoveredDevice> get discoveredDevices => List.unmodifiable(_discoveredDevices);
+  List<DiscoveredDevice> get discoveredDevices =>
+      List.unmodifiable(_discoveredDevices);
   bool get isScanning => _scanning;
 
   // ── Paired devices ─────────────────────────────────────────────────────
@@ -64,6 +81,7 @@ class AppState extends ChangeNotifier {
   ClipboardFetchStatus _clipboardStatus = ClipboardFetchStatus.idle;
   String _clipboardMessage = '';
   Map<String, dynamic>? _clipboardInfo;
+
   /// Progress of current clipboard fetch (0.0 to 1.0), or -1 if not fetching.
   double _clipboardProgress = -1;
 
@@ -71,8 +89,22 @@ class AppState extends ChangeNotifier {
   String get clipboardMessage => _clipboardMessage;
   Map<String, dynamic>? get clipboardInfo => _clipboardInfo;
   double get clipboardProgress => _clipboardProgress;
+
   /// Max auto-fetch size for text (512KB).
   static const int _maxAutoFetchSize = 524288;
+
+  // ── Mobile → Desktop attachments ───────────────────────────────────────
+  UploadState _upload = const UploadState();
+  File? _uploadFile;
+  RandomAccessFile? _uploadReader;
+  _DigestSink? _uploadDigestResult;
+  ByteConversionSink? _uploadDigest;
+  Timer? _uploadTimer;
+  int _uploadChunkSize = 0;
+  int _uploadSequence = 0;
+
+  UploadState get upload => _upload;
+  bool get supportsUpload => _connected && (_socket?.supportsUpload ?? false);
 
   final _uuid = const Uuid();
 
@@ -133,17 +165,32 @@ class AppState extends ChangeNotifier {
     notifyListeners();
   }
 
-  Future<ConnectResult> connectWithPin(DiscoveredDevice device, String pin) async {
+  Future<ConnectResult> connectWithPin(
+    DiscoveredDevice device,
+    String pin,
+  ) async {
     return _connect(device.ip, device.port, device.name, pin, isPaired: false);
   }
 
   Future<ConnectResult> connectPaired(PairedDevice device) async {
-    return _connect(device.ip, device.port, device.name, device.pin, isPaired: true, pairedKey: device.key);
+    return _connect(
+      device.ip,
+      device.port,
+      device.name,
+      device.pin,
+      isPaired: true,
+      pairedKey: device.key,
+    );
   }
 
   Future<ConnectResult> _connect(
-      String ip, int port, String name, String pin,
-      {bool isPaired = false, String? pairedKey}) async {
+    String ip,
+    int port,
+    String name,
+    String pin, {
+    bool isPaired = false,
+    String? pairedKey,
+  }) async {
     _authenticating = true;
     _authError = null;
     _reconnecting = false;
@@ -165,9 +212,9 @@ class AppState extends ChangeNotifier {
         _connectedDeviceName = daemonName;
         _authError = null;
         if (!_reconnecting) {
-          await StorageService.savePairedDevice(PairedDevice(
-            ip: ip, port: port, name: daemonName, pin: pin,
-          ));
+          await StorageService.savePairedDevice(
+            PairedDevice(ip: ip, port: port, name: daemonName, pin: pin),
+          );
           await _loadPaired();
         }
         _responseSub?.cancel();
@@ -220,6 +267,9 @@ class AppState extends ChangeNotifier {
         _reconnecting = false;
         _pendingRetry = null;
         _opTimer?.cancel();
+        if (_upload.blocksOtherActions) {
+          _setUploadError('连接已断开');
+        }
         _sendStatus = SendStatus.error;
         _sendMessage = '连接已断开';
         _clipboardStatus = ClipboardFetchStatus.error;
@@ -230,6 +280,10 @@ class AppState extends ChangeNotifier {
   }
 
   void disconnect() {
+    _clearUploadTimer();
+    _closeUploadReader();
+    _uploadFile = null;
+    _upload = const UploadState();
     _opTimer?.cancel();
     _pendingRetry = null;
     _reconnecting = false;
@@ -282,7 +336,10 @@ class AppState extends ChangeNotifier {
 
   void _onConnectionChange(bool connected) {
     if (!connected && !_reconnecting) {
-      // Heartbeat detected a dead connection — try silent reconnect
+      if (_upload.blocksOtherActions) {
+        _setUploadError('连接已断开');
+      }
+      // Heartbeat detected a dead connection — try silent reconnect.
       _reconnectAndRetry();
     }
   }
@@ -336,7 +393,7 @@ class AppState extends ChangeNotifier {
   // ─── Send ──────────────────────────────────────────────────────────────
 
   Future<void> send(String text) async {
-    if (!_connected || _socket == null) return;
+    if (!_connected || _socket == null || _upload.blocksOtherActions) return;
     if (text.trim().isEmpty) {
       _sendStatus = SendStatus.error;
       _sendMessage = '不能发送空文本';
@@ -362,7 +419,7 @@ class AppState extends ChangeNotifier {
   }
 
   Future<void> sendEnter() async {
-    if (!_connected || _socket == null) return;
+    if (!_connected || _socket == null || _upload.blocksOtherActions) return;
 
     _sendStatus = SendStatus.sending;
     _sendMessage = '发送回车中...';
@@ -380,7 +437,266 @@ class AppState extends ChangeNotifier {
     }
   }
 
+  Future<void> selectImage() async {
+    if (!supportsUpload || _upload.blocksOtherActions) return;
+    _upload = const UploadState(
+      status: UploadStatus.selecting,
+      message: '正在选择图片...',
+    );
+    notifyListeners();
+
+    try {
+      final image = await ImagePicker().pickImage(
+        source: ImageSource.gallery,
+        imageQuality: 100,
+      );
+      if (image == null) {
+        _upload = const UploadState();
+        notifyListeners();
+        return;
+      }
+      await _prepareUpload(File(image.path), UploadKind.image);
+    } catch (_) {
+      _setUploadError('无法读取所选图片');
+    }
+  }
+
+  Future<void> selectFile() async {
+    if (!supportsUpload || _upload.blocksOtherActions) return;
+    _upload = const UploadState(
+      status: UploadStatus.selecting,
+      message: '正在选择文件...',
+    );
+    notifyListeners();
+
+    try {
+      final result = await FilePicker.platform.pickFiles(
+        allowMultiple: false,
+        withData: false,
+      );
+      final path = result == null || result.files.length != 1
+          ? null
+          : result.files.single.path;
+      if (path == null) {
+        _upload = const UploadState();
+        notifyListeners();
+        return;
+      }
+      await _prepareUpload(File(path), UploadKind.file);
+    } catch (_) {
+      _setUploadError('无法读取所选文件');
+    }
+  }
+
+  Future<void> _prepareUpload(File file, UploadKind kind) async {
+    try {
+      final size = await file.length();
+      if (size == 0) {
+        _setUploadError('不能发送空文件');
+        return;
+      }
+      _uploadFile = file;
+      _upload = UploadState(
+        status: UploadStatus.ready,
+        kind: kind,
+        filename: file.uri.pathSegments.last,
+        totalBytes: size,
+        message: '准备发送',
+      );
+      notifyListeners();
+    } catch (_) {
+      _setUploadError('无法读取所选文件');
+    }
+  }
+
+  Future<void> startUpload() async {
+    final socket = _socket;
+    final file = _uploadFile;
+    final kind = _upload.kind;
+    if (!supportsUpload ||
+        socket == null ||
+        file == null ||
+        kind == null ||
+        !_upload.isReady) {
+      return;
+    }
+
+    try {
+      _uploadReader = await file.open();
+      _uploadDigestResult = _DigestSink();
+      _uploadDigest = sha256.startChunkedConversion(_uploadDigestResult!);
+      _uploadChunkSize = 0;
+      _uploadSequence = 0;
+      final id = _uuid.v4();
+      _upload = _upload.copyWith(
+        status: UploadStatus.uploading,
+        id: id,
+        receivedBytes: 0,
+        message: '正在连接电脑...',
+      );
+      notifyListeners();
+
+      final sent = await socket.startUpload(
+        id: id,
+        kind: kind.name,
+        filename: _upload.filename,
+        sizeBytes: _upload.totalBytes,
+      );
+      if (!sent) {
+        _setUploadError('上传请求发送失败');
+        return;
+      }
+      _resetUploadTimer();
+    } catch (_) {
+      _setUploadError('无法读取所选文件');
+    }
+  }
+
+  Future<void> cancelUpload() async {
+    final id = _upload.id;
+    _clearUploadTimer();
+    await _closeUploadReader();
+    _uploadFile = null;
+    _upload = UploadState(
+      status: UploadStatus.cancelled,
+      id: id,
+      message: '已取消发送',
+    );
+    notifyListeners();
+    if (id.isNotEmpty) {
+      await _socket?.cancelUpload(id);
+    }
+  }
+
+  void _resetUploadTimer() {
+    _uploadTimer?.cancel();
+    _uploadTimer = Timer(_opTimeoutLong, () {
+      _setUploadError('上传连接超时');
+    });
+  }
+
+  void _clearUploadTimer() {
+    _uploadTimer?.cancel();
+    _uploadTimer = null;
+  }
+
+  Future<void> _closeUploadReader() async {
+    final reader = _uploadReader;
+    _uploadReader = null;
+    _uploadDigest = null;
+    _uploadDigestResult = null;
+    if (reader != null) {
+      await reader.close();
+    }
+  }
+
+  void _setUploadError(String message) {
+    _clearUploadTimer();
+    _closeUploadReader();
+    _uploadFile = null;
+    _upload = UploadState(status: UploadStatus.error, message: message);
+    notifyListeners();
+  }
+
+  Future<void> _sendNextUploadChunk() async {
+    final socket = _socket;
+    final reader = _uploadReader;
+    if (socket == null ||
+        reader == null ||
+        _upload.status != UploadStatus.uploading) {
+      _setUploadError('上传连接已断开');
+      return;
+    }
+
+    try {
+      final chunk = await reader.read(_uploadChunkSize);
+      if (_upload.status != UploadStatus.uploading) return;
+      if (chunk.isEmpty) {
+        _uploadDigest?.close();
+        final digest = _uploadDigestResult?.value.toString();
+        if (digest == null) {
+          _setUploadError('无法校验文件完整性');
+          return;
+        }
+        final sent = await socket.finishUpload(
+          id: _upload.id,
+          sizeBytes: _upload.totalBytes,
+          sha256: digest,
+        );
+        if (!sent) {
+          _setUploadError('上传完成请求发送失败');
+          return;
+        }
+        _resetUploadTimer();
+        return;
+      }
+
+      _uploadDigest?.add(chunk);
+      final sent = await socket.sendUploadChunk(
+        id: _upload.id,
+        sequence: _uploadSequence,
+        payloadBase64: base64Encode(chunk),
+      );
+      if (!sent) {
+        _setUploadError('上传数据发送失败');
+        return;
+      }
+      _uploadSequence += 1;
+      _resetUploadTimer();
+    } catch (_) {
+      _setUploadError('读取文件失败');
+    }
+  }
+
+  void _onUploadReady(Map<String, dynamic> json) {
+    if (json['id'] != _upload.id || _upload.status != UploadStatus.uploading) {
+      return;
+    }
+    final chunkSize = (json['chunk_size'] as num?)?.toInt() ?? 0;
+    if (chunkSize <= 0 || chunkSize > 64 * 1024) {
+      _setUploadError('电脑返回了无效的上传参数');
+      return;
+    }
+    _uploadChunkSize = chunkSize;
+    _upload = _upload.copyWith(message: '正在发送...');
+    notifyListeners();
+    _sendNextUploadChunk();
+  }
+
+  void _onUploadChunkAck(Map<String, dynamic> json) {
+    if (json['id'] != _upload.id || _upload.status != UploadStatus.uploading) {
+      return;
+    }
+    final sequence = (json['seq'] as num?)?.toInt();
+    if (sequence != _uploadSequence - 1) {
+      _setUploadError('电脑返回了错误的上传确认');
+      return;
+    }
+    final received = (json['received_bytes'] as num?)?.toInt() ?? 0;
+    if (received < _upload.receivedBytes || received > _upload.totalBytes) {
+      _setUploadError('电脑返回了无效的上传进度');
+      return;
+    }
+    _upload = _upload.copyWith(receivedBytes: received, message: '正在发送...');
+    notifyListeners();
+    _sendNextUploadChunk();
+  }
+
+  void _onUploadCompleted() {
+    final kind = _upload.kind;
+    _clearUploadTimer();
+    _closeUploadReader();
+    _uploadFile = null;
+    _upload = UploadState(
+      status: UploadStatus.sent,
+      kind: kind,
+      message: kind == UploadKind.image ? '图片已写入电脑剪贴板' : '文件已写入电脑剪贴板',
+    );
+    notifyListeners();
+  }
+
   void queryClipboard() {
+    if (_upload.blocksOtherActions) return;
     _stopProgressTracking();
     _clipboardStatus = ClipboardFetchStatus.idle;
     if (!_connected || _socket == null) return;
@@ -394,6 +710,7 @@ class AppState extends ChangeNotifier {
   }
 
   void confirmClipboardFetch() {
+    if (_upload.blocksOtherActions) return;
     if (_clipboardInfo == null) return;
     final contentType = _clipboardInfo!['content_type'] as String? ?? '';
     if (contentType.isEmpty || contentType == 'none') return;
@@ -419,7 +736,26 @@ class AppState extends ChangeNotifier {
 
   void _onResponse(Map<String, dynamic> json) {
     final type = json['type'] as String? ?? '';
+    final id = json['id'] as String? ?? '';
 
+    if (type == 'upload_ready') {
+      _onUploadReady(json);
+      return;
+    }
+    if (type == 'upload_chunk_ack') {
+      _onUploadChunkAck(json);
+      return;
+    }
+    if (id.isNotEmpty && id == _upload.id) {
+      if (_upload.status == UploadStatus.uploading) {
+        if (type == 'ack') {
+          _onUploadCompleted();
+        } else if (type == 'nack') {
+          _setUploadError(json['message'] as String? ?? '上传失败');
+        }
+      }
+      return;
+    }
     if (type == 'clipboard_info') {
       _onClipboardInfo(json);
       return;
@@ -429,10 +765,8 @@ class AppState extends ChangeNotifier {
       return;
     }
 
-    // Send/key ack/nack — cancel timeout on any response
+    // Send/key ack/nack — cancel timeout on any response.
     _clearOpTimer();
-
-    final id = json['id'] as String? ?? '';
     final status = json['status'] as String? ?? '';
 
     if (type == 'ack') {
@@ -540,7 +874,9 @@ class AppState extends ChangeNotifier {
 
     try {
       final dir = await getTemporaryDirectory();
-      final file = File('${dir.path}/cliplink_${DateTime.now().millisecondsSinceEpoch}.png');
+      final file = File(
+        '${dir.path}/cliplink_${DateTime.now().millisecondsSinceEpoch}.png',
+      );
       await file.writeAsBytes(pngBytes);
       await Gal.putImage(file.path);
       _clipboardStatus = ClipboardFetchStatus.done;
@@ -582,6 +918,8 @@ class AppState extends ChangeNotifier {
   @override
   void dispose() {
     _opTimer?.cancel();
+    _clearUploadTimer();
+    _closeUploadReader();
     _progressSub?.cancel();
     _discovery.dispose();
     _socket?.dispose();

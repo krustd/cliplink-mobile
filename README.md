@@ -1,6 +1,6 @@
 # Flick
 
-**Flick** — 手机端 APP，发现局域网内的 [ClipLink Daemon](https://github.com/krustd/cliplinkd)，双向传输剪贴板内容和文件。
+**Flick** — 手机端 APP，发现局域网内的 [ClipLink Daemon](https://github.com/krustd/cliplinkd)，双向传输剪贴板内容，并向电脑发送文本、图片和文件。
 
 ## 工作流
 
@@ -9,8 +9,8 @@
 1. 电脑启动 cliplinkd 守护进程
 2. 手机打开 Flick APP → 自动扫描局域网设备
 3. 点击设备 → 首次输入 PIN 码（之后自动记住）
-4. 输入文本 → 点发送
-5. 电脑端自动粘贴 → 手机显示"已发送"
+4. 输入文本、选择图片或选择文件
+5. 确认发送；图片直接写入电脑剪贴板，文件缓存到电脑后作为文件引用写入剪贴板并自动粘贴
 
 ### 电脑 → 手机（获取剪贴板）
 
@@ -22,15 +22,16 @@
 ## 特性
 
 - **剪贴板拉取**：获取电脑剪贴板（文本/图片/文件），大文件有进度条
+- **发送图片与文件**：图片按 PNG/JPEG 写入电脑剪贴板；普通文件分块上传，显示确认和真实进度
 - **多播发现 + 子网扫描**：224.0.0.167 多播 + Burst 首发；5 秒无结果自动 TCP 扫描 /24 子网
 
 ## 平台支持
 
 | 平台 | 状态 | 备注 |
 |------|------|------|
-| Android | 正式支持 | 需 `INTERNET` 权限，Flutter 默认已配置 |
-| iOS | 正式支持 | 首次使用需授权本地网络访问 |
-| OpenHarmony | 兼容 | 通过 `flutter_harmony` 构建，`RawDatagramSocket` 可用；部分 ROM 可能限制 UDP 多播，降级为 TCP 子网扫描 |
+| Android | 正式支持 | 系统图片 / 文件选择器；需 `INTERNET` 权限 |
+| iOS | 正式支持 | 首次选择图片时请求相册访问权限；首次使用需授权本地网络访问 |
+| OpenHarmony | 基础连接兼容 | 附件选择依赖尚未在 OpenHarmony 工具链验证；不可用时会显示选择失败，不影响文本与剪贴板拉取 |
 
 ## 构建
 
@@ -64,19 +65,20 @@ lib/
 ├── models/
 │   ├── discovered_device.dart     # 扫描发现的设备
 │   ├── paired_device.dart         # 已配对设备（含 PIN）
-│   └── send_result.dart           # 发送结果（sent / error）
+│   ├── send_result.dart           # 文本发送状态
+│   └── upload_state.dart          # 附件上传状态与进度
 ├── providers/
 │   └── app_state.dart             # ChangeNotifier 全局状态
 ├── services/
-│   ├── discovery_service.dart     # 多播发现 + TCP 子网扫描
-│   ├── socket_service.dart        # TCP 连接、认证、心跳、断线重连
+│   ├── discovery_service.dart     # 多播发现 + TCP 连接与上传协议
 │   ├── storage_service.dart       # SharedPreferences 配对存储
 │   └── file_saver.dart            # 文件保存到下载目录（MediaStore）
 ├── screens/
 │   ├── devices_screen.dart        # 设备列表 + 手动连接 + 配对管理
 │   ├── pin_screen.dart            # PIN 码输入
-│   └── send_screen.dart           # 文本发送 + 剪贴板拉取 + 进度条
+│   └── send_screen.dart           # 文本、附件发送与剪贴板拉取
 └── test/
+    ├── upload_state_test.dart     # 上传状态单元测试
     └── widget_test.dart
 
 ## 依赖
@@ -86,6 +88,10 @@ lib/
 | `provider` | 状态管理 |
 | `shared_preferences` | 本地配对信息持久化 |
 | `uuid` | 消息去重 ID |
+| `crypto` | 上传文件完整性摘要 |
+| `flutter_plugin_android_lifecycle` | 与当前 Android 构建链兼容的文件选择器生命周期依赖 |
+| `file_picker` | 系统文件选择器 |
+| `image_picker` | 系统图库选择器 |
 | `gal` | 图片保存到相册 |
 | `path_provider` | 临时文件路径 |
 | `dart:io` | TCP Socket / UDP RawDatagramSocket |
