@@ -33,7 +33,7 @@ class _DevicesScreenState extends State<DevicesScreen> {
   }
 
   void _onConnected() {
-    Navigator.pushReplacement(
+    Navigator.push(
       context,
       MaterialPageRoute(builder: (_) => const SendScreen()),
     );

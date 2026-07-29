@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../models/send_result.dart';
 import '../providers/app_state.dart';
-import 'devices_screen.dart';
 
 class SendScreen extends StatefulWidget {
   const SendScreen({super.key});
@@ -178,10 +177,7 @@ class _SendScreenState extends State<SendScreen> {
           TextButton.icon(
             onPressed: () {
               context.read<AppState>().disconnect();
-              Navigator.pushReplacement(
-                context,
-                MaterialPageRoute(builder: (_) => const DevicesScreen()),
-              );
+              Navigator.pop(context);
             },
             icon: const Icon(Icons.swap_horiz_rounded, size: 18),
             label: const Text('切换'),
