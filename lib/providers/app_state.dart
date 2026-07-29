@@ -4,7 +4,6 @@ import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:uuid/uuid.dart';
-import 'package:super_clipboard/super_clipboard.dart';
 import 'package:gal/gal.dart';
 import 'package:path_provider/path_provider.dart';
 import '../models/discovered_device.dart';
@@ -13,6 +12,7 @@ import '../models/send_result.dart';
 import '../services/discovery_service.dart';
 import '../services/socket_service.dart';
 import '../services/storage_service.dart';
+import '../services/clipboard_native.dart';
 
 enum ConnectResult { success, wrongPin, connectionFailed }
 
@@ -244,7 +244,6 @@ class AppState extends ChangeNotifier {
 
   // ─── Clipboard Pull ────────────────────────────────────────────────────
 
-  /// Initiate a clipboard query from the daemon.
   void queryClipboard() {
     if (!_connected || _socket == null) return;
     _clipboardStatus = ClipboardFetchStatus.querying;
@@ -254,7 +253,6 @@ class AppState extends ChangeNotifier {
     _socket!.queryClipboard();
   }
 
-  /// User confirmed a pending clipboard fetch. Proceed to fetch.
   void confirmClipboardFetch() {
     if (_clipboardInfo == null) return;
     final contentType = _clipboardInfo!['content_type'] as String? ?? '';
@@ -266,7 +264,6 @@ class AppState extends ChangeNotifier {
     _socket?.fetchClipboard(contentType, id: _uuid.v4());
   }
 
-  /// Cancel a pending clipboard operation.
   void cancelClipboardFetch() {
     _clipboardStatus = ClipboardFetchStatus.idle;
     _clipboardMessage = '';
@@ -274,12 +271,11 @@ class AppState extends ChangeNotifier {
     notifyListeners();
   }
 
-  // ─── Response handler (extended for clipboard) ────────────────────────
+  // ─── Response handler ──────────────────────────────────────────────────
 
   void _onResponse(Map<String, dynamic> json) {
     final type = json['type'] as String? ?? '';
 
-    // Handle clipboard responses
     if (type == 'clipboard_info') {
       _onClipboardInfo(json);
       return;
@@ -289,7 +285,6 @@ class AppState extends ChangeNotifier {
       return;
     }
 
-    // Existing send/key response handling
     final id = json['id'] as String? ?? '';
     final status = json['status'] as String? ?? '';
 
@@ -320,11 +315,9 @@ class AppState extends ChangeNotifier {
 
     _clipboardInfo = json;
 
-    // Text: auto-fetch if ≤ 512KB, otherwise prompt
     if (contentType == 'text') {
       final sizeBytes = (json['size_bytes'] as num?)?.toInt() ?? 0;
       if (sizeBytes <= _maxAutoFetchSize) {
-        // Auto-fetch without confirmation
         _clipboardStatus = ClipboardFetchStatus.fetching;
         _clipboardMessage = '正在获取文本...';
         notifyListeners();
@@ -333,8 +326,7 @@ class AppState extends ChangeNotifier {
       }
     }
 
-    // Image, file, or large text: wait for user confirmation
-    _clipboardStatus = ClipboardFetchStatus.done; // "done" here means "info ready, awaiting confirmation"
+    _clipboardStatus = ClipboardFetchStatus.done;
     _clipboardMessage = '';
     notifyListeners();
   }
@@ -354,13 +346,10 @@ class AppState extends ChangeNotifier {
       switch (contentType) {
         case 'text':
           await _handleClipboardText(json);
-          break;
         case 'image':
           await _handleClipboardImage(json);
-          break;
         case 'file':
           await _handleClipboardFile(json);
-          break;
         default:
           _clipboardStatus = ClipboardFetchStatus.error;
           _clipboardMessage = '未知内容类型: $contentType';
@@ -380,7 +369,6 @@ class AppState extends ChangeNotifier {
       _clipboardMessage = '剪贴板文本为空';
       return;
     }
-
     await Clipboard.setData(ClipboardData(text: payload));
     _clipboardStatus = ClipboardFetchStatus.done;
     _clipboardMessage = '文本已复制到剪贴板';
@@ -396,22 +384,13 @@ class AppState extends ChangeNotifier {
 
     final pngBytes = base64Decode(b64);
 
-    // Try clipboard first via super_clipboard
-    try {
-      final clipboard = SystemClipboard.instance;
-      if (clipboard != null) {
-        final item = DataWriterItem();
-        item.add(Formats.png(Uint8List.fromList(pngBytes)));
-        await clipboard.write([item]);
-        _clipboardStatus = ClipboardFetchStatus.done;
-        _clipboardMessage = '图片已复制到剪贴板';
-        return;
-      }
-    } catch (_) {
-      // Clipboard write failed, fall through to gallery
+    final ok = await ClipboardNative.writeImage(Uint8List.fromList(pngBytes));
+    if (ok) {
+      _clipboardStatus = ClipboardFetchStatus.done;
+      _clipboardMessage = '图片已复制到剪贴板';
+      return;
     }
 
-    // Fallback: save to gallery
     try {
       final dir = await getTemporaryDirectory();
       final file = File('${dir.path}/cliplink_image_${DateTime.now().millisecondsSinceEpoch}.png');
@@ -435,28 +414,17 @@ class AppState extends ChangeNotifier {
     }
 
     final fileBytes = base64Decode(b64);
-
-    // Save to app's temp directory first
     final tempDir = await getTemporaryDirectory();
     final tempFile = File('${tempDir.path}/$filename');
     await tempFile.writeAsBytes(fileBytes);
 
-    // Try clipboard with file URI
-    try {
-      final clipboard = SystemClipboard.instance;
-      if (clipboard != null) {
-        final item = DataWriterItem();
-        item.add(Formats.fileUri(tempFile.uri));
-        await clipboard.write([item]);
-        _clipboardStatus = ClipboardFetchStatus.done;
-        _clipboardMessage = '文件已复制到剪贴板';
-        return;
-      }
-    } catch (_) {
-      // Clipboard write failed, fall through to downloads
+    final ok = await ClipboardNative.writeFileUri(tempFile.path);
+    if (ok) {
+      _clipboardStatus = ClipboardFetchStatus.done;
+      _clipboardMessage = '文件已复制到剪贴板';
+      return;
     }
 
-    // Fallback: save to downloads
     try {
       final downloadsDir = await getApplicationDocumentsDirectory();
       final savedFile = File('${downloadsDir.path}/$filename');
