@@ -14,6 +14,8 @@ class SocketService {
   bool _authenticated = false;
   bool _disposed = false;
   String? _remoteName;
+  /// Buffer for incomplete lines arriving over TCP.
+  String _lineBuffer = '';
 
   String? get remoteName => _remoteName;
   final _responseController = StreamController<Map<String, dynamic>>.broadcast();
@@ -49,11 +51,17 @@ class SocketService {
 
       sub = _socket!.listen(
         (data) {
-          final text = utf8.decode(data);
-          for (final line in text.split('\n')) {
-            if (line.trim().isEmpty) continue;
+          _lineBuffer += utf8.decode(data);
+          // Process all complete lines (ending with \n).
+          // The remainder (after last \n) stays in _lineBuffer.
+          while (true) {
+            final newlineIdx = _lineBuffer.indexOf('\n');
+            if (newlineIdx == -1) break;
+            final line = _lineBuffer.substring(0, newlineIdx).trim();
+            _lineBuffer = _lineBuffer.substring(newlineIdx + 1);
+            if (line.isEmpty) continue;
             try {
-              final json = jsonDecode(line.trim()) as Map<String, dynamic>;
+              final json = jsonDecode(line) as Map<String, dynamic>;
               if (json['type'] == 'auth_ok') {
                 _authenticated = true;
                 _remoteName = json['name'] as String?;
@@ -169,6 +177,7 @@ class SocketService {
 
   void _handleDisconnect() {
     _authenticated = false;
+    _lineBuffer = '';
     _socket?.destroy();
     _socket = null;
     _heartbeatTimer?.cancel();
@@ -196,6 +205,7 @@ class SocketService {
     _socket?.destroy();
     _socket = null;
     _authenticated = false;
+    _lineBuffer = '';
     _connectionController.add(false);
   }
 
