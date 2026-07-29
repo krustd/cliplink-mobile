@@ -1,27 +1,28 @@
 # Flick
 
-**Flick** — 手机端 APP（原名 ClipLink Mobile），发现局域网内的 [ClipLink Daemon](https://github.com/krustd/cliplinkd) 并 flick 文本到电脑自动粘贴。
+**Flick** — 手机端 APP，发现局域网内的 [ClipLink Daemon](https://github.com/krustd/cliplinkd)，双向传输剪贴板内容和文件。
 
 ## 工作流
 
-```
+### 手机 → 电脑
+
 1. 电脑启动 cliplinkd 守护进程
 2. 手机打开 Flick APP → 自动扫描局域网设备
 3. 点击设备 → 首次输入 PIN 码（之后自动记住）
 4. 输入文本 → 点发送
 5. 电脑端自动粘贴 → 手机显示"已发送"
-```
+
+### 电脑 → 手机（获取剪贴板）
+
+1. 连接成功后，点击 📋「获取剪贴板」
+2. 文本 ≤ 512KB 自动复制到手机剪贴板
+3. 图片 / 文件 / 大文本弹出确认框，显示大小
+4. 确认后下载：图片 → 相册，文件 → 下载目录
 
 ## 特性
 
+- **剪贴板拉取**：获取电脑剪贴板（文本/图片/文件），大文件有进度条
 - **多播发现 + 子网扫描**：224.0.0.167 多播 + Burst 首发；5 秒无结果自动 TCP 扫描 /24 子网
-- **手动连接**：支持手动输入 IP:Port 连接
-- **PIN 认证**：首次连接输入 PIN，之后自动记住（SharedPreferences 本地存储）；PIN 过期自动清除并跳转重输
-- **配对管理**：已配对设备优先显示，在线绿色/离线灰色，支持取消配对
-- **名字自动更新**：重连后自动同步 daemon 的最新设备名
-- **实时状态**：已发送 / 发送失败，带颜色提示
-- **断线重连**：指数退避自动重连（1s → 2s → 4s → ... → max 30s）
-- **连接失败区分**：服务端离线 vs PIN 错误，提示不同
 
 ## 平台支持
 
@@ -69,14 +70,14 @@ lib/
 ├── services/
 │   ├── discovery_service.dart     # 多播发现 + TCP 子网扫描
 │   ├── socket_service.dart        # TCP 连接、认证、心跳、断线重连
-│   └── storage_service.dart       # SharedPreferences 配对存储
+│   ├── storage_service.dart       # SharedPreferences 配对存储
+│   └── file_saver.dart            # 文件保存到下载目录（MediaStore）
 ├── screens/
 │   ├── devices_screen.dart        # 设备列表 + 手动连接 + 配对管理
 │   ├── pin_screen.dart            # PIN 码输入
-│   └── send_screen.dart           # 文本发送 + 状态显示
+│   └── send_screen.dart           # 文本发送 + 剪贴板拉取 + 进度条
 └── test/
     └── widget_test.dart
-```
 
 ## 依赖
 
@@ -85,9 +86,9 @@ lib/
 | `provider` | 状态管理 |
 | `shared_preferences` | 本地配对信息持久化 |
 | `uuid` | 消息去重 ID |
+| `gal` | 图片保存到相册 |
+| `path_provider` | 临时文件路径 |
 | `dart:io` | TCP Socket / UDP RawDatagramSocket |
-
-## 配对电脑端
 
 Flick 需要配合 [ClipLink Daemon (`cliplinkd`)](https://github.com/krustd/cliplinkd) 使用。请先在电脑上安装并启动守护进程。
 
