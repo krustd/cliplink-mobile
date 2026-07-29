@@ -180,7 +180,15 @@ class AppState extends ChangeNotifier {
           _reconnecting = false;
           final retry = _pendingRetry!;
           _pendingRetry = null;
+          notifyListeners(); // clear stale error messages
           retry();
+        } else if (_reconnecting) {
+          _reconnecting = false;
+          _pendingRetry = null;
+          _sendStatus = SendStatus.idle;
+          _sendMessage = '';
+          _clipboardStatus = ClipboardFetchStatus.idle;
+          _clipboardMessage = '';
         }
         return ConnectResult.success;
 
@@ -274,12 +282,8 @@ class AppState extends ChangeNotifier {
 
   void _onConnectionChange(bool connected) {
     if (!connected && !_reconnecting) {
-      _connected = false;
-      _sendStatus = SendStatus.error;
-      _sendMessage = '连接已断开';
-      _clipboardStatus = ClipboardFetchStatus.error;
-      _clipboardMessage = '连接已断开';
-      notifyListeners();
+      // Heartbeat detected a dead connection — try silent reconnect
+      _reconnectAndRetry();
     }
   }
 

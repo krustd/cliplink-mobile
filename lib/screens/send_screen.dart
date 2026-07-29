@@ -122,15 +122,6 @@ class _SendScreenState extends State<SendScreen> {
 
   @override
   Widget build(BuildContext context) {
-    // Auto-pop back to device list when connection drops
-    final state = context.watch<AppState>();
-    if (!state.isConnected && mounted) {
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted && !context.read<AppState>().isConnected) {
-          Navigator.of(context).pop();
-        }
-      });
-    }
     final theme = Theme.of(context);
 
     return Scaffold(
