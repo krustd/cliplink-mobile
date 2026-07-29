@@ -12,6 +12,7 @@ import '../models/send_result.dart';
 import '../services/discovery_service.dart';
 import '../services/socket_service.dart';
 import '../services/storage_service.dart';
+import '../services/file_saver.dart';
 
 enum ConnectResult { success, wrongPin, connectionFailed }
 
@@ -406,16 +407,17 @@ class AppState extends ChangeNotifier {
     }
 
     final fileBytes = base64Decode(b64);
-
     try {
-      final dir = await getApplicationDocumentsDirectory();
-      final file = File('${dir.path}/$filename');
-      await file.writeAsBytes(fileBytes);
-      _clipboardStatus = ClipboardFetchStatus.done;
-      _clipboardMessage = '文件已保存到文档目录';
+      final ok = await FileSaver.saveToDownloads(filename, fileBytes);
+      if (ok) {
+        _clipboardStatus = ClipboardFetchStatus.done;
+        _clipboardMessage = '文件已保存到下载目录';
+      } else {
+        _clipboardStatus = ClipboardFetchStatus.error;
+        _clipboardMessage = '文件保存失败';
+      }
     } catch (e) {
       _clipboardStatus = ClipboardFetchStatus.error;
-      _clipboardMessage = '文件保存失败: $e';
     }
   }
 
