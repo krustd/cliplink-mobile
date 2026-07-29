@@ -288,8 +288,14 @@ class AppState extends ChangeNotifier {
     _stopProgressTracking();
     final info = _clipboardInfo;
     if (info == null || _socket == null) return;
-
-    final sizeBytes = (info['size_bytes'] as num?)?.toInt() ?? 0;
+    // Extract size: text/image have top-level size_bytes; files have nested files[].size
+    int sizeBytes = (info['size_bytes'] as num?)?.toInt() ?? 0;
+    if (sizeBytes <= 0 && contentType == 'file') {
+      final files = info['files'] as List<dynamic>?;
+      if (files != null && files.isNotEmpty) {
+        sizeBytes = (files[0]['size'] as num?)?.toInt() ?? 0;
+      }
+    }
     if (sizeBytes <= 0) return;
 
     // Estimated total transmitted size (accounts for base64 + JSON overhead)
