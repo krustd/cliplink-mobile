@@ -12,7 +12,6 @@ import '../models/send_result.dart';
 import '../services/discovery_service.dart';
 import '../services/socket_service.dart';
 import '../services/storage_service.dart';
-import '../services/clipboard_native.dart';
 
 enum ConnectResult { success, wrongPin, connectionFailed }
 
@@ -384,16 +383,9 @@ class AppState extends ChangeNotifier {
 
     final pngBytes = base64Decode(b64);
 
-    final ok = await ClipboardNative.writeImage(Uint8List.fromList(pngBytes));
-    if (ok) {
-      _clipboardStatus = ClipboardFetchStatus.done;
-      _clipboardMessage = '图片已复制到剪贴板';
-      return;
-    }
-
     try {
       final dir = await getTemporaryDirectory();
-      final file = File('${dir.path}/cliplink_image_${DateTime.now().millisecondsSinceEpoch}.png');
+      final file = File('${dir.path}/cliplink_${DateTime.now().millisecondsSinceEpoch}.png');
       await file.writeAsBytes(pngBytes);
       await Gal.putImage(file.path);
       _clipboardStatus = ClipboardFetchStatus.done;
@@ -414,21 +406,11 @@ class AppState extends ChangeNotifier {
     }
 
     final fileBytes = base64Decode(b64);
-    final tempDir = await getTemporaryDirectory();
-    final tempFile = File('${tempDir.path}/$filename');
-    await tempFile.writeAsBytes(fileBytes);
-
-    final ok = await ClipboardNative.writeFileUri(tempFile.path);
-    if (ok) {
-      _clipboardStatus = ClipboardFetchStatus.done;
-      _clipboardMessage = '文件已复制到剪贴板';
-      return;
-    }
 
     try {
-      final downloadsDir = await getApplicationDocumentsDirectory();
-      final savedFile = File('${downloadsDir.path}/$filename');
-      await savedFile.writeAsBytes(fileBytes);
+      final dir = await getApplicationDocumentsDirectory();
+      final file = File('${dir.path}/$filename');
+      await file.writeAsBytes(fileBytes);
       _clipboardStatus = ClipboardFetchStatus.done;
       _clipboardMessage = '文件已保存到文档目录';
     } catch (e) {
