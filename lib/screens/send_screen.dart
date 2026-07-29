@@ -38,6 +38,10 @@ class _SendScreenState extends State<SendScreen> {
     _focusNode.requestFocus();
   }
 
+  void _sendEnter() {
+    context.read<AppState>().sendEnter();
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
@@ -128,35 +132,58 @@ class _SendScreenState extends State<SendScreen> {
 
             const SizedBox(height: 14),
 
-            // ── Send button ────────────────────────────────────────
+            // ── Action buttons ───────────────────────────────────────
             Consumer<AppState>(
               builder: (context, state, _) {
                 final sending = state.sendStatus == SendStatus.sending;
                 final connected = state.isConnected;
 
-                return SizedBox(
-                  width: double.infinity,
-                  height: 54,
-                  child: ElevatedButton.icon(
-                    onPressed: connected && !sending ? _send : null,
-                    icon: sending
-                        ? const SizedBox(
-                            width: 20,
-                            height: 20,
-                            child: CircularProgressIndicator(
-                              strokeWidth: 2.5,
-                              color: Colors.white,
-                            ),
-                          )
-                        : const Icon(Icons.send_rounded, size: 20),
-                    label: Text(sending ? '发送中...' : '发送到电脑'),
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: theme.colorScheme.primary,
-                      foregroundColor: Colors.white,
-                      disabledBackgroundColor: Colors.grey.shade200,
-                      disabledForegroundColor: Colors.grey.shade400,
+                return Row(
+                  children: [
+                    // Send text button
+                    Expanded(
+                      flex: 3,
+                      child: SizedBox(
+                        height: 54,
+                        child: ElevatedButton.icon(
+                          onPressed: connected && !sending ? _send : null,
+                          icon: sending
+                              ? const SizedBox(
+                                  width: 20,
+                                  height: 20,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2.5,
+                                    color: Colors.white,
+                                  ),
+                                )
+                              : const Icon(Icons.send_rounded, size: 20),
+                          label: Text(sending ? '发送中...' : '发送文本'),
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: theme.colorScheme.primary,
+                            foregroundColor: Colors.white,
+                            disabledBackgroundColor: Colors.grey.shade200,
+                            disabledForegroundColor: Colors.grey.shade400,
+                          ),
+                        ),
+                      ),
                     ),
-                  ),
+                    const SizedBox(width: 10),
+                    // Enter key button
+                    SizedBox(
+                      width: 64,
+                      height: 54,
+                      child: OutlinedButton(
+                        onPressed: connected && !sending ? _sendEnter : null,
+                        style: OutlinedButton.styleFrom(
+                          padding: EdgeInsets.zero,
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(14),
+                          ),
+                        ),
+                        child: const Icon(Icons.keyboard_return, size: 24),
+                      ),
+                    ),
+                  ],
                 );
               },
             ),

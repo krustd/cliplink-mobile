@@ -115,6 +115,19 @@ class SocketService {
     }
   }
 
+  /// Send a key press to the daemon.
+  Future<SendResult?> sendKey(String key, String id) async {
+    if (_socket == null || !_authenticated) return null;
+    try {
+      final msg = jsonEncode({'type': 'key', 'key': key, 'id': id});
+      _socket!.write('$msg\n');
+      await _socket!.flush();
+      return null;
+    } catch (_) {
+      return SendResult(status: SendStatus.error, id: id, message: '发送失败');
+    }
+  }
+
   void _startHeartbeat() {
     _heartbeatTimer?.cancel();
     _heartbeatTimer = Timer.periodic(const Duration(seconds: 25), (_) {

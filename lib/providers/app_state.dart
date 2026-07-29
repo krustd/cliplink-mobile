@@ -212,6 +212,23 @@ class AppState extends ChangeNotifier {
     // Otherwise, wait for response via _onResponse
   }
 
+  /// Send an Enter key press to the connected daemon.
+  Future<void> sendEnter() async {
+    if (!_connected || _socket == null) return;
+
+    _sendStatus = SendStatus.sending;
+    _sendMessage = '发送回车中...';
+    notifyListeners();
+
+    final id = _uuid.v4();
+    final result = await _socket!.sendKey('enter', id);
+    if (result != null) {
+      _sendStatus = result.status;
+      _sendMessage = result.message;
+      notifyListeners();
+    }
+  }
+
   void _onResponse(Map<String, dynamic> json) {
     final type = json['type'] as String? ?? '';
     final id = json['id'] as String? ?? '';
