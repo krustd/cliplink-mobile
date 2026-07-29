@@ -166,8 +166,7 @@ class SocketService {
   }
 
   void _startHeartbeat() {
-    _heartbeatTimer?.cancel();
-    _heartbeatTimer = Timer.periodic(const Duration(seconds: 25), (_) {
+    _heartbeatTimer = Timer.periodic(const Duration(seconds: 15), (_) {
       if (_socket != null && _authenticated) {
         try {
           _socket!.write('{"type":"ping"}\n');

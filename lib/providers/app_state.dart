@@ -75,7 +75,6 @@ class AppState extends ChangeNotifier {
   static const int _maxAutoFetchSize = 524288;
 
   final _uuid = const Uuid();
-  StreamSubscription? _responseSub;
 
   // ── Operation timeout / reconnect ──────────────────────────────────────
   StreamSubscription<int>? _progressSub;
@@ -87,6 +86,9 @@ class AppState extends ChangeNotifier {
   bool _reconnecting = false;
 
   // ─── Init ──────────────────────────────────────────────────────────────
+
+  StreamSubscription? _responseSub;
+  StreamSubscription<bool>? _connectionSub;
 
   AppState() {
     _loadPaired();
@@ -170,7 +172,8 @@ class AppState extends ChangeNotifier {
         }
         _responseSub?.cancel();
         _responseSub = _socket!.responses.listen(_onResponse);
-        notifyListeners();
+        _connectionSub?.cancel();
+        _connectionSub = _socket!.connectionState.listen(_onConnectionChange);
 
         // If this was a reconnect, retry the pending operation
         if (_reconnecting && _pendingRetry != null) {
@@ -235,6 +238,7 @@ class AppState extends ChangeNotifier {
     _clipboardMessage = '';
     _clipboardInfo = null;
     _responseSub?.cancel();
+    _connectionSub?.cancel();
     notifyListeners();
   }
 
@@ -266,6 +270,17 @@ class AppState extends ChangeNotifier {
     _opTimer?.cancel();
     _opTimer = null;
     _pendingRetry = null;
+  }
+
+  void _onConnectionChange(bool connected) {
+    if (!connected && !_reconnecting) {
+      _connected = false;
+      _sendStatus = SendStatus.error;
+      _sendMessage = '连接已断开';
+      _clipboardStatus = ClipboardFetchStatus.error;
+      _clipboardMessage = '连接已断开';
+      notifyListeners();
+    }
   }
 
   /// Start tracking download progress for clipboard fetch.
@@ -561,6 +576,7 @@ class AppState extends ChangeNotifier {
     _discovery.dispose();
     _socket?.dispose();
     _responseSub?.cancel();
+    _connectionSub?.cancel();
     super.dispose();
   }
 }
