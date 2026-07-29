@@ -1,7 +1,6 @@
 package com.cliplink.clip_link_mobile
 
 import android.content.ContentValues
-import android.content.Context
 import android.os.Environment
 import android.provider.MediaStore
 import io.flutter.embedding.android.FlutterActivity
@@ -39,21 +38,30 @@ class MainActivity : FlutterActivity() {
 
     private fun saveToDownloads(fileName: String, bytes: ByteArray) {
         if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
-            // Android 10+: use MediaStore
+            // Android 10+: MediaStore with IS_PENDING dance
             val values = ContentValues().apply {
                 put(MediaStore.Downloads.DISPLAY_NAME, fileName)
                 put(MediaStore.Downloads.MIME_TYPE, "application/octet-stream")
-                put(MediaStore.Downloads.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS)
+                put(MediaStore.Downloads.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS + "/")
+                // Mark as pending until write completes
+                put(MediaStore.Downloads.IS_PENDING, 1)
             }
-            val uri = contentResolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
+            val resolver = contentResolver
+            val uri = resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
             uri?.let {
-                contentResolver.openOutputStream(it)?.use { out ->
+                resolver.openOutputStream(it)?.use { out ->
                     out.write(bytes)
                 }
+                // Clear pending flag to make the file visible
+                val updateValues = ContentValues().apply {
+                    put(MediaStore.Downloads.IS_PENDING, 0)
+                }
+                resolver.update(it, updateValues, null, null)
             }
         } else {
             // Android 9 and below: direct file
             val dir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
+            if (!dir.exists()) dir.mkdirs()
             val file = File(dir, fileName)
             file.writeBytes(bytes)
         }
