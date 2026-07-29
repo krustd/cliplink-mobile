@@ -42,6 +42,11 @@ class AppState extends ChangeNotifier {
   String? _authError;
   DiscoveredDevice? _needsPinFor;
 
+  // Stored for reconnection
+  String _lastIp = '';
+  int _lastPort = 9527;
+  String _lastPin = '';
+
   bool get isConnected => _connected;
   String get connectedDeviceName => _connectedDeviceName;
   bool get isAuthenticating => _authenticating;
@@ -69,6 +74,14 @@ class AppState extends ChangeNotifier {
 
   final _uuid = const Uuid();
   StreamSubscription? _responseSub;
+
+  // ── Operation timeout / reconnect ──────────────────────────────────────
+  Timer? _opTimer;
+  VoidCallback? _pendingRetry;
+  static const _opTimeoutShort = Duration(seconds: 3);
+  static const _opTimeoutLong = Duration(seconds: 15);
+
+  bool _reconnecting = false;
 
   // ─── Init ──────────────────────────────────────────────────────────────
 
@@ -128,6 +141,7 @@ class AppState extends ChangeNotifier {
       {bool isPaired = false, String? pairedKey}) async {
     _authenticating = true;
     _authError = null;
+    _reconnecting = false;
     notifyListeners();
 
     _socket?.dispose();
@@ -139,22 +153,38 @@ class AppState extends ChangeNotifier {
     switch (status) {
       case ConnectionStatus.success:
         _connected = true;
+        _lastIp = ip;
+        _lastPort = port;
+        _lastPin = pin;
         final daemonName = _socket?.remoteName ?? name;
         _connectedDeviceName = daemonName;
         _authError = null;
-        await StorageService.savePairedDevice(PairedDevice(
-          ip: ip, port: port, name: daemonName, pin: pin,
-        ));
-        await _loadPaired();
+        if (!_reconnecting) {
+          await StorageService.savePairedDevice(PairedDevice(
+            ip: ip, port: port, name: daemonName, pin: pin,
+          ));
+          await _loadPaired();
+        }
         _responseSub?.cancel();
         _responseSub = _socket!.responses.listen(_onResponse);
         notifyListeners();
+
+        // If this was a reconnect, retry the pending operation
+        if (_reconnecting && _pendingRetry != null) {
+          _reconnecting = false;
+          final retry = _pendingRetry!;
+          _pendingRetry = null;
+          retry();
+        }
         return ConnectResult.success;
 
       case ConnectionStatus.authFailed:
         _connected = false;
         _socket?.dispose();
         _socket = null;
+        _reconnecting = false;
+        _pendingRetry = null;
+        _opTimer?.cancel();
         if (isPaired && pairedKey != null) {
           await StorageService.removePairedDevice(pairedKey);
           await _loadPaired();
@@ -170,17 +200,32 @@ class AppState extends ChangeNotifier {
         _connected = false;
         _socket?.dispose();
         _socket = null;
-        _authError = '无法连接，请检查服务端是否已启动';
+        if (!_reconnecting) {
+          _authError = '无法连接，请检查服务端是否已启动';
+        }
+        _reconnecting = false;
+        _pendingRetry = null;
+        _opTimer?.cancel();
+        _sendStatus = SendStatus.error;
+        _sendMessage = '连接已断开';
+        _clipboardStatus = ClipboardFetchStatus.error;
+        _clipboardMessage = '连接已断开';
         notifyListeners();
         return ConnectResult.connectionFailed;
     }
   }
 
   void disconnect() {
+    _opTimer?.cancel();
+    _pendingRetry = null;
+    _reconnecting = false;
     _socket?.disconnect();
     _socket = null;
     _connected = false;
     _connectedDeviceName = '';
+    _lastIp = '';
+    _lastPort = 9527;
+    _lastPin = '';
     _sendStatus = SendStatus.idle;
     _sendMessage = '';
     _clipboardStatus = ClipboardFetchStatus.idle;
@@ -202,6 +247,37 @@ class AppState extends ChangeNotifier {
     notifyListeners();
   }
 
+  // ─── Operation timeout helper ──────────────────────────────────────────
+
+  /// Start a timeout that triggers reconnection and retry on expiry.
+  void _startOpTimer(Duration timeout, VoidCallback retry) {
+    _opTimer?.cancel();
+    _pendingRetry = retry;
+    _opTimer = Timer(timeout, () {
+      if (!_connected || _socket == null) return;
+      _reconnectAndRetry();
+    });
+  }
+
+  void _clearOpTimer() {
+    _opTimer?.cancel();
+    _opTimer = null;
+    _pendingRetry = null;
+  }
+
+  Future<void> _reconnectAndRetry() async {
+    if (_reconnecting) return;
+    if (_lastIp.isEmpty || _lastPin.isEmpty) return;
+    _reconnecting = true;
+    _socket?.disconnect();
+    _socket = null;
+    _connected = false;
+    _responseSub?.cancel();
+    notifyListeners();
+
+    await _connect(_lastIp, _lastPort, _connectedDeviceName, _lastPin);
+  }
+
   // ─── Send ──────────────────────────────────────────────────────────────
 
   Future<void> send(String text) async {
@@ -217,9 +293,13 @@ class AppState extends ChangeNotifier {
     _sendMessage = '发送中...';
     notifyListeners();
 
+    // Start timeout — if no ack/nack within 3s, reconnect and retry
     final id = _uuid.v4();
+    _startOpTimer(_opTimeoutShort, () => send(text));
+
     final result = await _socket!.send(text, id);
     if (result != null) {
+      _clearOpTimer();
       _sendStatus = result.status;
       _sendMessage = result.message;
       notifyListeners();
@@ -233,9 +313,12 @@ class AppState extends ChangeNotifier {
     _sendMessage = '发送回车中...';
     notifyListeners();
 
+    _startOpTimer(_opTimeoutShort, () => sendEnter());
+
     final id = _uuid.v4();
     final result = await _socket!.sendKey('enter', id);
     if (result != null) {
+      _clearOpTimer();
       _sendStatus = result.status;
       _sendMessage = result.message;
       notifyListeners();
@@ -250,6 +333,8 @@ class AppState extends ChangeNotifier {
     _clipboardMessage = '正在查询剪贴板...';
     _clipboardInfo = null;
     notifyListeners();
+
+    _startOpTimer(_opTimeoutShort, queryClipboard);
     _socket!.queryClipboard();
   }
 
@@ -261,10 +346,15 @@ class AppState extends ChangeNotifier {
     _clipboardStatus = ClipboardFetchStatus.fetching;
     _clipboardMessage = '正在获取...';
     notifyListeners();
+
+    // Use longer timeout for image/file fetches which may be large
+    final timeout = (contentType == 'text') ? _opTimeoutShort : _opTimeoutLong;
+    _startOpTimer(timeout, confirmClipboardFetch);
     _socket?.fetchClipboard(contentType, id: _uuid.v4());
   }
 
   void cancelClipboardFetch() {
+    _clearOpTimer();
     _clipboardStatus = ClipboardFetchStatus.idle;
     _clipboardMessage = '';
     _clipboardInfo = null;
@@ -285,6 +375,9 @@ class AppState extends ChangeNotifier {
       return;
     }
 
+    // Send/key ack/nack — cancel timeout on any response
+    _clearOpTimer();
+
     final id = json['id'] as String? ?? '';
     final status = json['status'] as String? ?? '';
 
@@ -303,6 +396,7 @@ class AppState extends ChangeNotifier {
   }
 
   void _onClipboardInfo(Map<String, dynamic> json) {
+    _clearOpTimer();
     final contentType = json['content_type'] as String? ?? 'none';
 
     if (contentType == 'none') {
@@ -321,6 +415,9 @@ class AppState extends ChangeNotifier {
         _clipboardStatus = ClipboardFetchStatus.fetching;
         _clipboardMessage = '正在获取文本...';
         notifyListeners();
+        _startOpTimer(_opTimeoutShort, () {
+          if (_clipboardInfo != null) confirmClipboardFetch();
+        });
         _socket?.fetchClipboard('text', id: _uuid.v4());
         return;
       }
@@ -332,6 +429,7 @@ class AppState extends ChangeNotifier {
   }
 
   Future<void> _onClipboardData(Map<String, dynamic> json) async {
+    _clearOpTimer();
     final contentType = json['content_type'] as String? ?? 'error';
 
     if (contentType == 'error') {
@@ -407,6 +505,7 @@ class AppState extends ChangeNotifier {
     }
 
     final fileBytes = base64Decode(b64);
+
     try {
       final ok = await FileSaver.saveToDownloads(filename, fileBytes);
       if (ok) {
@@ -418,6 +517,7 @@ class AppState extends ChangeNotifier {
       }
     } catch (e) {
       _clipboardStatus = ClipboardFetchStatus.error;
+      _clipboardMessage = '文件保存失败: $e';
     }
   }
 
@@ -425,6 +525,7 @@ class AppState extends ChangeNotifier {
 
   @override
   void dispose() {
+    _opTimer?.cancel();
     _scanTimeout?.cancel();
     _discovery.dispose();
     _socket?.dispose();
