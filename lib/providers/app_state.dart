@@ -1,6 +1,12 @@
 import 'dart:async';
+import 'dart:convert';
+import 'dart:io';
 import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart';
 import 'package:uuid/uuid.dart';
+import 'package:super_clipboard/super_clipboard.dart';
+import 'package:gal/gal.dart';
+import 'package:path_provider/path_provider.dart';
 import '../models/discovered_device.dart';
 import '../models/paired_device.dart';
 import '../models/send_result.dart';
@@ -9,6 +15,9 @@ import '../services/socket_service.dart';
 import '../services/storage_service.dart';
 
 enum ConnectResult { success, wrongPin, connectionFailed }
+
+/// Clipboard fetch status.
+enum ClipboardFetchStatus { idle, querying, fetching, done, error }
 
 /// Central application state, managed via Provider.
 class AppState extends ChangeNotifier {
@@ -31,7 +40,7 @@ class AppState extends ChangeNotifier {
   String _connectedDeviceName = '';
   bool _authenticating = false;
   String? _authError;
-  DiscoveredDevice? _needsPinFor; // set when stored PIN is wrong
+  DiscoveredDevice? _needsPinFor;
 
   bool get isConnected => _connected;
   String get connectedDeviceName => _connectedDeviceName;
@@ -45,6 +54,18 @@ class AppState extends ChangeNotifier {
 
   SendStatus get sendStatus => _sendStatus;
   String get sendMessage => _sendMessage;
+
+  // ── Clipboard Pull ─────────────────────────────────────────────────────
+  ClipboardFetchStatus _clipboardStatus = ClipboardFetchStatus.idle;
+  String _clipboardMessage = '';
+  Map<String, dynamic>? _clipboardInfo;
+
+  ClipboardFetchStatus get clipboardStatus => _clipboardStatus;
+  String get clipboardMessage => _clipboardMessage;
+  Map<String, dynamic>? get clipboardInfo => _clipboardInfo;
+
+  /// Max auto-fetch size for text (512KB).
+  static const int _maxAutoFetchSize = 524288;
 
   final _uuid = const Uuid();
   StreamSubscription? _responseSub;
@@ -66,7 +87,6 @@ class AppState extends ChangeNotifier {
     _scanning = true;
     notifyListeners();
 
-    // Auto-stop after 15 seconds
     _scanTimeout?.cancel();
     _scanTimeout = Timer(const Duration(seconds: 15), () {
       if (_scanning) stopScan();
@@ -84,9 +104,7 @@ class AppState extends ChangeNotifier {
 
     try {
       await _discovery.startScan();
-    } catch (_) {
-      // Scan start may fail; discovery may still work on retry
-    }
+    } catch (_) {}
   }
 
   void stopScan() {
@@ -97,12 +115,10 @@ class AppState extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// Connect to a discovered device with a PIN.
   Future<ConnectResult> connectWithPin(DiscoveredDevice device, String pin) async {
     return _connect(device.ip, device.port, device.name, pin, isPaired: false);
   }
 
-  /// Connect to a paired device using its stored PIN.
   Future<ConnectResult> connectPaired(PairedDevice device) async {
     return _connect(device.ip, device.port, device.name, device.pin, isPaired: true, pairedKey: device.key);
   }
@@ -160,7 +176,6 @@ class AppState extends ChangeNotifier {
     }
   }
 
-  /// Disconnect from current device.
   void disconnect() {
     _socket?.disconnect();
     _socket = null;
@@ -168,26 +183,27 @@ class AppState extends ChangeNotifier {
     _connectedDeviceName = '';
     _sendStatus = SendStatus.idle;
     _sendMessage = '';
+    _clipboardStatus = ClipboardFetchStatus.idle;
+    _clipboardMessage = '';
+    _clipboardInfo = null;
     _responseSub?.cancel();
     notifyListeners();
   }
 
-  /// Consume the pending PIN request and return the device info.
   DiscoveredDevice? consumeNeedsPinFor() {
     final d = _needsPinFor;
     _needsPinFor = null;
     return d;
   }
 
-  /// Remove a paired device from storage.
   Future<void> unpair(PairedDevice device) async {
     await StorageService.removePairedDevice(device.key);
     await _loadPaired();
     notifyListeners();
   }
+
   // ─── Send ──────────────────────────────────────────────────────────────
 
-  /// Send text to the connected daemon.
   Future<void> send(String text) async {
     if (!_connected || _socket == null) return;
     if (text.trim().isEmpty) {
@@ -204,15 +220,12 @@ class AppState extends ChangeNotifier {
     final id = _uuid.v4();
     final result = await _socket!.send(text, id);
     if (result != null) {
-      // Immediate error (not connected, etc.)
       _sendStatus = result.status;
       _sendMessage = result.message;
       notifyListeners();
     }
-    // Otherwise, wait for response via _onResponse
   }
 
-  /// Send an Enter key press to the connected daemon.
   Future<void> sendEnter() async {
     if (!_connected || _socket == null) return;
 
@@ -229,8 +242,54 @@ class AppState extends ChangeNotifier {
     }
   }
 
+  // ─── Clipboard Pull ────────────────────────────────────────────────────
+
+  /// Initiate a clipboard query from the daemon.
+  void queryClipboard() {
+    if (!_connected || _socket == null) return;
+    _clipboardStatus = ClipboardFetchStatus.querying;
+    _clipboardMessage = '正在查询剪贴板...';
+    _clipboardInfo = null;
+    notifyListeners();
+    _socket!.queryClipboard();
+  }
+
+  /// User confirmed a pending clipboard fetch. Proceed to fetch.
+  void confirmClipboardFetch() {
+    if (_clipboardInfo == null) return;
+    final contentType = _clipboardInfo!['content_type'] as String? ?? '';
+    if (contentType.isEmpty || contentType == 'none') return;
+
+    _clipboardStatus = ClipboardFetchStatus.fetching;
+    _clipboardMessage = '正在获取...';
+    notifyListeners();
+    _socket?.fetchClipboard(contentType, id: _uuid.v4());
+  }
+
+  /// Cancel a pending clipboard operation.
+  void cancelClipboardFetch() {
+    _clipboardStatus = ClipboardFetchStatus.idle;
+    _clipboardMessage = '';
+    _clipboardInfo = null;
+    notifyListeners();
+  }
+
+  // ─── Response handler (extended for clipboard) ────────────────────────
+
   void _onResponse(Map<String, dynamic> json) {
     final type = json['type'] as String? ?? '';
+
+    // Handle clipboard responses
+    if (type == 'clipboard_info') {
+      _onClipboardInfo(json);
+      return;
+    }
+    if (type == 'clipboard_data') {
+      _onClipboardData(json);
+      return;
+    }
+
+    // Existing send/key response handling
     final id = json['id'] as String? ?? '';
     final status = json['status'] as String? ?? '';
 
@@ -246,6 +305,168 @@ class AppState extends ChangeNotifier {
     }
 
     notifyListeners();
+  }
+
+  void _onClipboardInfo(Map<String, dynamic> json) {
+    final contentType = json['content_type'] as String? ?? 'none';
+
+    if (contentType == 'none') {
+      _clipboardStatus = ClipboardFetchStatus.done;
+      _clipboardMessage = '电脑剪贴板为空';
+      _clipboardInfo = null;
+      notifyListeners();
+      return;
+    }
+
+    _clipboardInfo = json;
+
+    // Text: auto-fetch if ≤ 512KB, otherwise prompt
+    if (contentType == 'text') {
+      final sizeBytes = (json['size_bytes'] as num?)?.toInt() ?? 0;
+      if (sizeBytes <= _maxAutoFetchSize) {
+        // Auto-fetch without confirmation
+        _clipboardStatus = ClipboardFetchStatus.fetching;
+        _clipboardMessage = '正在获取文本...';
+        notifyListeners();
+        _socket?.fetchClipboard('text', id: _uuid.v4());
+        return;
+      }
+    }
+
+    // Image, file, or large text: wait for user confirmation
+    _clipboardStatus = ClipboardFetchStatus.done; // "done" here means "info ready, awaiting confirmation"
+    _clipboardMessage = '';
+    notifyListeners();
+  }
+
+  Future<void> _onClipboardData(Map<String, dynamic> json) async {
+    final contentType = json['content_type'] as String? ?? 'error';
+
+    if (contentType == 'error') {
+      _clipboardStatus = ClipboardFetchStatus.error;
+      _clipboardMessage = json['message'] as String? ?? '获取失败';
+      _clipboardInfo = null;
+      notifyListeners();
+      return;
+    }
+
+    try {
+      switch (contentType) {
+        case 'text':
+          await _handleClipboardText(json);
+          break;
+        case 'image':
+          await _handleClipboardImage(json);
+          break;
+        case 'file':
+          await _handleClipboardFile(json);
+          break;
+        default:
+          _clipboardStatus = ClipboardFetchStatus.error;
+          _clipboardMessage = '未知内容类型: $contentType';
+      }
+    } catch (e) {
+      _clipboardStatus = ClipboardFetchStatus.error;
+      _clipboardMessage = '处理失败: $e';
+    }
+    _clipboardInfo = null;
+    notifyListeners();
+  }
+
+  Future<void> _handleClipboardText(Map<String, dynamic> json) async {
+    final payload = json['payload'] as String? ?? '';
+    if (payload.isEmpty) {
+      _clipboardStatus = ClipboardFetchStatus.error;
+      _clipboardMessage = '剪贴板文本为空';
+      return;
+    }
+
+    await Clipboard.setData(ClipboardData(text: payload));
+    _clipboardStatus = ClipboardFetchStatus.done;
+    _clipboardMessage = '文本已复制到剪贴板';
+  }
+
+  Future<void> _handleClipboardImage(Map<String, dynamic> json) async {
+    final b64 = json['payload_base64'] as String? ?? '';
+    if (b64.isEmpty) {
+      _clipboardStatus = ClipboardFetchStatus.error;
+      _clipboardMessage = '图片数据为空';
+      return;
+    }
+
+    final pngBytes = base64Decode(b64);
+
+    // Try clipboard first via super_clipboard
+    try {
+      final clipboard = SystemClipboard.instance;
+      if (clipboard != null) {
+        final item = DataWriterItem();
+        item.add(Formats.png(Uint8List.fromList(pngBytes)));
+        await clipboard.write([item]);
+        _clipboardStatus = ClipboardFetchStatus.done;
+        _clipboardMessage = '图片已复制到剪贴板';
+        return;
+      }
+    } catch (_) {
+      // Clipboard write failed, fall through to gallery
+    }
+
+    // Fallback: save to gallery
+    try {
+      final dir = await getTemporaryDirectory();
+      final file = File('${dir.path}/cliplink_image_${DateTime.now().millisecondsSinceEpoch}.png');
+      await file.writeAsBytes(pngBytes);
+      await Gal.putImage(file.path);
+      _clipboardStatus = ClipboardFetchStatus.done;
+      _clipboardMessage = '图片已保存到相册';
+    } catch (e) {
+      _clipboardStatus = ClipboardFetchStatus.error;
+      _clipboardMessage = '图片保存失败: $e';
+    }
+  }
+
+  Future<void> _handleClipboardFile(Map<String, dynamic> json) async {
+    final b64 = json['payload_base64'] as String? ?? '';
+    final filename = json['filename'] as String? ?? 'file';
+    if (b64.isEmpty) {
+      _clipboardStatus = ClipboardFetchStatus.error;
+      _clipboardMessage = '文件数据为空';
+      return;
+    }
+
+    final fileBytes = base64Decode(b64);
+
+    // Save to app's temp directory first
+    final tempDir = await getTemporaryDirectory();
+    final tempFile = File('${tempDir.path}/$filename');
+    await tempFile.writeAsBytes(fileBytes);
+
+    // Try clipboard with file URI
+    try {
+      final clipboard = SystemClipboard.instance;
+      if (clipboard != null) {
+        final item = DataWriterItem();
+        item.add(Formats.fileUri(tempFile.uri));
+        await clipboard.write([item]);
+        _clipboardStatus = ClipboardFetchStatus.done;
+        _clipboardMessage = '文件已复制到剪贴板';
+        return;
+      }
+    } catch (_) {
+      // Clipboard write failed, fall through to downloads
+    }
+
+    // Fallback: save to downloads
+    try {
+      final downloadsDir = await getApplicationDocumentsDirectory();
+      final savedFile = File('${downloadsDir.path}/$filename');
+      await savedFile.writeAsBytes(fileBytes);
+      _clipboardStatus = ClipboardFetchStatus.done;
+      _clipboardMessage = '文件已保存到文档目录';
+    } catch (e) {
+      _clipboardStatus = ClipboardFetchStatus.error;
+      _clipboardMessage = '文件保存失败: $e';
+    }
   }
 
   // ─── Cleanup ───────────────────────────────────────────────────────────

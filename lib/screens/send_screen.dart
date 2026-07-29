@@ -14,6 +14,7 @@ class SendScreen extends StatefulWidget {
 class _SendScreenState extends State<SendScreen> {
   final _textController = TextEditingController();
   final _focusNode = FocusNode();
+  bool _dialogShown = false;
 
   @override
   void initState() {
@@ -40,6 +41,84 @@ class _SendScreenState extends State<SendScreen> {
 
   void _sendEnter() {
     context.read<AppState>().sendEnter();
+  }
+
+  void _fetchClipboard() {
+    _dialogShown = false;
+    context.read<AppState>().queryClipboard();
+  }
+
+  /// Show a confirmation dialog for clipboard content the user must approve.
+  void _showClipboardConfirm(AppState state) {
+    final info = state.clipboardInfo;
+    if (info == null) return;
+
+    final contentType = info['content_type'] as String? ?? '';
+    String title;
+    String body;
+
+    switch (contentType) {
+      case 'text':
+        final sizeBytes = (info['size_bytes'] as num?)?.toInt() ?? 0;
+        title = '获取文本';
+        body = '电脑剪贴板有文本内容，大小约 ${_formatSize(sizeBytes)}，是否获取？';
+        break;
+      case 'image':
+        final sizeBytes = (info['size_bytes'] as num?)?.toInt() ?? 0;
+        final width = info['width'] as int?;
+        final height = info['height'] as int?;
+        final dims = (width != null && height != null) ? '$width\u00d7$height' : '';
+        title = '获取图片';
+        body = '电脑剪贴板有图片${dims.isNotEmpty ? ' ($dims)' : ''}，大小约 ${_formatSize(sizeBytes)}，是否获取？';
+        break;
+      case 'file':
+        final files = info['files'] as List<dynamic>? ?? [];
+        if (files.isEmpty) {
+          title = '获取文件';
+          body = '电脑剪贴板上有文件，是否获取？';
+        } else if (files.length == 1) {
+          final name = files[0]['name'] as String? ?? '';
+          final size = (files[0]['size'] as num?)?.toInt() ?? 0;
+          title = '获取文件';
+          body = '$name (${_formatSize(size)})，是否获取？';
+        } else {
+          title = '获取文件';
+          body = '电脑剪贴板上有 ${files.length} 个文件，是否获取？';
+        }
+        break;
+      default:
+        return;
+    }
+
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text(title),
+        content: Text(body),
+        actions: [
+          TextButton(
+            onPressed: () {
+              Navigator.of(ctx).pop();
+              state.cancelClipboardFetch();
+            },
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            onPressed: () {
+              Navigator.of(ctx).pop();
+              state.confirmClipboardFetch();
+            },
+            child: const Text('获取'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  String _formatSize(int bytes) {
+    if (bytes < 1024) return '$bytes B';
+    if (bytes < 1024 * 1024) return '${(bytes / 1024).toStringAsFixed(1)} KB';
+    return '${(bytes / (1024 * 1024)).toStringAsFixed(1)} MB';
   }
 
   @override
@@ -78,6 +157,24 @@ class _SendScreenState extends State<SendScreen> {
           ),
         ),
         actions: [
+          Consumer<AppState>(
+            builder: (_, state, _) => IconButton(
+              onPressed: state.isConnected &&
+                      state.clipboardStatus != ClipboardFetchStatus.querying &&
+                      state.clipboardStatus != ClipboardFetchStatus.fetching
+                  ? _fetchClipboard
+                  : null,
+              icon: state.clipboardStatus == ClipboardFetchStatus.querying ||
+                      state.clipboardStatus == ClipboardFetchStatus.fetching
+                  ? const SizedBox(
+                      width: 20,
+                      height: 20,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Icon(Icons.content_paste_rounded),
+              tooltip: '获取剪贴板',
+            ),
+          ),
           TextButton.icon(
             onPressed: () {
               context.read<AppState>().disconnect();
@@ -97,10 +194,19 @@ class _SendScreenState extends State<SendScreen> {
           children: [
             // ── Status chip ───────────────────────────────────────
             Consumer<AppState>(
-              builder: (_, state, _) => _StatusChip(
-                status: state.sendStatus,
-                message: state.sendMessage,
-              ),
+              builder: (_, state, _) {
+                // Show clipboard status when active, else send status
+                if (state.clipboardStatus != ClipboardFetchStatus.idle) {
+                  return _ClipboardStatusChip(
+                    status: state.clipboardStatus,
+                    message: state.clipboardMessage,
+                  );
+                }
+                return _StatusChip(
+                  status: state.sendStatus,
+                  message: state.sendMessage,
+                );
+              },
             ),
 
             const SizedBox(height: 14),
@@ -138,9 +244,29 @@ class _SendScreenState extends State<SendScreen> {
                 final sending = state.sendStatus == SendStatus.sending;
                 final connected = state.isConnected;
 
+                // Reset dialog flag when clipboard state is cleared
+                if (state.clipboardInfo == null) {
+                  _dialogShown = false;
+                }
+                // Check if we need to show clipboard confirmation
+                if (state.clipboardInfo != null &&
+                    state.clipboardStatus == ClipboardFetchStatus.done) {
+                  final info = state.clipboardInfo!;
+                  final contentType = info['content_type'] as String? ?? '';
+                  // Text ≤ 512KB was auto-fetched; other types need confirmation
+                  final needsConfirm = contentType != 'text' ||
+                      ((info['size_bytes'] as num?)?.toInt() ?? 0) > 524288;
+
+                  if (needsConfirm && !_dialogShown) {
+                    _dialogShown = true;
+                    WidgetsBinding.instance.addPostFrameCallback((_) {
+                      _showClipboardConfirm(state);
+                    });
+                  }
+                }
+
                 return Row(
                   children: [
-                    // Send text button
                     Expanded(
                       flex: 3,
                       child: SizedBox(
@@ -168,7 +294,6 @@ class _SendScreenState extends State<SendScreen> {
                       ),
                     ),
                     const SizedBox(width: 10),
-                    // Enter key button
                     SizedBox(
                       width: 64,
                       height: 54,
@@ -229,6 +354,62 @@ class _StatusChip extends StatelessWidget {
         mainAxisSize: MainAxisSize.min,
         children: [
           Icon(icon, color: fgColor, size: 18),
+          const SizedBox(width: 8),
+          Flexible(
+            child: Text(
+              message,
+              style: TextStyle(
+                color: fgColor,
+                fontSize: 13,
+                fontWeight: FontWeight.w500,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Clipboard-specific status chip.
+class _ClipboardStatusChip extends StatelessWidget {
+  final ClipboardFetchStatus status;
+  final String message;
+
+  const _ClipboardStatusChip({required this.status, required this.message});
+
+  @override
+  Widget build(BuildContext context) {
+    if (status == ClipboardFetchStatus.idle) return const SizedBox(height: 4);
+
+    final (bgColor, fgColor, icon) = switch (status) {
+      ClipboardFetchStatus.querying || ClipboardFetchStatus.fetching =>
+        (Colors.blue.shade50, Colors.blue.shade700, Icons.cloud_download_rounded),
+      ClipboardFetchStatus.done =>
+        (Colors.green.shade50, Colors.green.shade700, Icons.check_circle_rounded),
+      ClipboardFetchStatus.error =>
+        (Colors.red.shade50, Colors.red.shade700, Icons.error_rounded),
+      _ => (Colors.grey.shade100, Colors.grey.shade600, Icons.info_rounded),
+    };
+
+    return AnimatedContainer(
+      duration: const Duration(milliseconds: 250),
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+      decoration: BoxDecoration(
+        color: bgColor,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: fgColor.withAlpha(50)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          status == ClipboardFetchStatus.querying || status == ClipboardFetchStatus.fetching
+              ? const SizedBox(
+                  width: 18,
+                  height: 18,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                )
+              : Icon(icon, color: fgColor, size: 18),
           const SizedBox(width: 8),
           Flexible(
             child: Text(

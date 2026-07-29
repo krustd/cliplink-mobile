@@ -128,6 +128,31 @@ class SocketService {
     }
   }
 
+  /// Query the daemon's clipboard for content type and size.
+  Future<void> queryClipboard() async {
+    if (_socket == null || !_authenticated) return;
+    try {
+      final msg = jsonEncode({'type': 'clipboard_query'});
+      _socket!.write('$msg\n');
+      await _socket!.flush();
+    } catch (_) {}
+  }
+
+  /// Fetch clipboard content from the daemon.
+  Future<void> fetchClipboard(String contentType, {int fileIndex = 0, String id = ''}) async {
+    if (_socket == null || !_authenticated) return;
+    try {
+      final msg = jsonEncode({
+        'type': 'clipboard_fetch',
+        'content_type': contentType,
+        if (contentType == 'file') 'index': fileIndex,
+        'id': id,
+      });
+      _socket!.write('$msg\n');
+      await _socket!.flush();
+    } catch (_) {}
+  }
+
   void _startHeartbeat() {
     _heartbeatTimer?.cancel();
     _heartbeatTimer = Timer.periodic(const Duration(seconds: 25), (_) {
