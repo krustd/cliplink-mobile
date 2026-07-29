@@ -7,18 +7,18 @@ void main() {
   runApp(
     ChangeNotifierProvider(
       create: (_) => AppState(),
-      child: const ClipLinkApp(),
+      child: const FlickApp(),
     ),
   );
 }
 
-class ClipLinkApp extends StatelessWidget {
-  const ClipLinkApp({super.key});
+class FlickApp extends StatelessWidget {
+  const FlickApp({super.key});
 
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'ClipLink',
+      title: 'Flick',
       debugShowCheckedModeBanner: false,
       theme: ThemeData(
         colorScheme: ColorScheme.fromSeed(

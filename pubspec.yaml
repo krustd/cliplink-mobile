@@ -1,5 +1,5 @@
 name: clip_link_mobile
-description: "ClipLink Mobile — send text from phone to desktop clipboard"
+description: "Flick — flick text & keys from phone to desktop"
 publish_to: 'none'
 repository: "https://github.com/krustd/cliplink-mobile"
 

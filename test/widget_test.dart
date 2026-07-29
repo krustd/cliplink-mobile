@@ -10,7 +10,7 @@ void main() {
     await tester.pumpWidget(
       ChangeNotifierProvider.value(
         value: appState,
-        child: const ClipLinkApp(),
+        child: const FlickApp(),
       ),
     );
     await tester.pump();

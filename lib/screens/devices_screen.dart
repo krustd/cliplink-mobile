@@ -53,7 +53,7 @@ class _DevicesScreenState extends State<DevicesScreen> {
     return Scaffold(
       appBar: AppBar(
         title: const Text(
-          'ClipLink',
+          'Flick',
           style: TextStyle(fontWeight: FontWeight.w700),
         ),
         actions: [

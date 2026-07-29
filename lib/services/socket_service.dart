@@ -39,7 +39,7 @@ class SocketService {
       final authMsg = jsonEncode({
         'type': 'auth',
         'pin': pin,
-        'device_name': 'ClipLink Mobile',
+        'device_name': 'Flick',
       });
       _socket!.write('$authMsg\n');
       await _socket!.flush();

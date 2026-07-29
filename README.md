@@ -1,12 +1,12 @@
-# ClipLink Mobile
+# Flick
 
-**ClipLink Mobile** — 手机端 APP，发现局域网内的 [ClipLink Daemon](https://github.com/krustd/cliplinkd) 并将文本发送到电脑自动粘贴。
+**Flick** — 手机端 APP（原名 ClipLink Mobile），发现局域网内的 [ClipLink Daemon](https://github.com/krustd/cliplinkd) 并 flick 文本到电脑自动粘贴。
 
 ## 工作流
 
 ```
 1. 电脑启动 cliplinkd 守护进程
-2. 手机打开 ClipLink APP → 自动扫描局域网设备
+2. 手机打开 Flick APP → 自动扫描局域网设备
 3. 点击设备 → 首次输入 PIN 码（之后自动记住）
 4. 输入文本 → 点发送
 5. 电脑端自动粘贴 → 手机显示"已发送"
@@ -89,7 +89,7 @@ lib/
 
 ## 配对电脑端
 
-ClipLink Mobile 需要配合 [ClipLink Daemon (`cliplinkd`)](https://github.com/krustd/cliplinkd) 使用。请先在电脑上安装并启动守护进程。
+Flick 需要配合 [ClipLink Daemon (`cliplinkd`)](https://github.com/krustd/cliplinkd) 使用。请先在电脑上安装并启动守护进程。
 
 ## 许可
 
