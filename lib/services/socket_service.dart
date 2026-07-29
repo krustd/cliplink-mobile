@@ -23,6 +23,9 @@ class SocketService {
 
   final _connectionController = StreamController<bool>.broadcast();
   Stream<bool> get connectionState => _connectionController.stream;
+  /// Emits the current line buffer size (bytes received for in-flight message).
+  final _progressController = StreamController<int>.broadcast();
+  Stream<int> get receiveProgress => _progressController.stream;
 
   Timer? _heartbeatTimer;
   Timer? _reconnectTimer;
@@ -52,6 +55,7 @@ class SocketService {
       sub = _socket!.listen(
         (data) {
           _lineBuffer += utf8.decode(data);
+          _progressController.add(_lineBuffer.length);
           // Process all complete lines (ending with \n).
           // The remainder (after last \n) stays in _lineBuffer.
           while (true) {
@@ -208,10 +212,10 @@ class SocketService {
     _lineBuffer = '';
     _connectionController.add(false);
   }
-
   void dispose() {
     disconnect();
     _responseController.close();
     _connectionController.close();
+    _progressController.close();
   }
 }

@@ -64,11 +64,13 @@ class AppState extends ChangeNotifier {
   ClipboardFetchStatus _clipboardStatus = ClipboardFetchStatus.idle;
   String _clipboardMessage = '';
   Map<String, dynamic>? _clipboardInfo;
+  /// Progress of current clipboard fetch (0.0 to 1.0), or -1 if not fetching.
+  double _clipboardProgress = -1;
 
   ClipboardFetchStatus get clipboardStatus => _clipboardStatus;
   String get clipboardMessage => _clipboardMessage;
   Map<String, dynamic>? get clipboardInfo => _clipboardInfo;
-
+  double get clipboardProgress => _clipboardProgress;
   /// Max auto-fetch size for text (512KB).
   static const int _maxAutoFetchSize = 524288;
 
@@ -76,6 +78,7 @@ class AppState extends ChangeNotifier {
   StreamSubscription? _responseSub;
 
   // ── Operation timeout / reconnect ──────────────────────────────────────
+  StreamSubscription<int>? _progressSub;
   Timer? _opTimer;
   VoidCallback? _pendingRetry;
   static const _opTimeoutShort = Duration(seconds: 3);
@@ -265,6 +268,33 @@ class AppState extends ChangeNotifier {
     _pendingRetry = null;
   }
 
+  /// Start tracking download progress for clipboard fetch.
+  void _startProgressTracking(String contentType) {
+    _stopProgressTracking();
+    final info = _clipboardInfo;
+    if (info == null || _socket == null) return;
+
+    final sizeBytes = (info['size_bytes'] as num?)?.toInt() ?? 0;
+    if (sizeBytes <= 0) return;
+
+    // Estimated total transmitted size (accounts for base64 + JSON overhead)
+    final totalEstimate = (contentType == 'text')
+        ? sizeBytes.toDouble()
+        : sizeBytes * 1.4;
+
+    _clipboardProgress = 0;
+    _progressSub = _socket!.receiveProgress.listen((received) {
+      _clipboardProgress = (received / totalEstimate).clamp(0.0, 1.0);
+      notifyListeners();
+    });
+  }
+
+  void _stopProgressTracking() {
+    _progressSub?.cancel();
+    _progressSub = null;
+    _clipboardProgress = -1;
+  }
+
   Future<void> _reconnectAndRetry() async {
     if (_reconnecting) return;
     if (_lastIp.isEmpty || _lastPin.isEmpty) return;
@@ -325,9 +355,9 @@ class AppState extends ChangeNotifier {
     }
   }
 
-  // ─── Clipboard Pull ────────────────────────────────────────────────────
-
   void queryClipboard() {
+    _stopProgressTracking();
+    _clipboardStatus = ClipboardFetchStatus.idle;
     if (!_connected || _socket == null) return;
     _clipboardStatus = ClipboardFetchStatus.querying;
     _clipboardMessage = '正在查询剪贴板...';
@@ -346,10 +376,9 @@ class AppState extends ChangeNotifier {
     _clipboardStatus = ClipboardFetchStatus.fetching;
     _clipboardMessage = '正在获取...';
     notifyListeners();
-
-    // Use longer timeout for image/file fetches which may be large
-    final timeout = (contentType == 'text') ? _opTimeoutShort : _opTimeoutLong;
-    _startOpTimer(timeout, confirmClipboardFetch);
+    final duration = (contentType == 'text') ? _opTimeoutShort : _opTimeoutLong;
+    _startOpTimer(duration, confirmClipboardFetch);
+    _startProgressTracking(contentType);
     _socket?.fetchClipboard(contentType, id: _uuid.v4());
   }
 
@@ -397,6 +426,7 @@ class AppState extends ChangeNotifier {
 
   void _onClipboardInfo(Map<String, dynamic> json) {
     _clearOpTimer();
+    _stopProgressTracking();
     final contentType = json['content_type'] as String? ?? 'none';
 
     if (contentType == 'none') {
@@ -430,6 +460,7 @@ class AppState extends ChangeNotifier {
 
   Future<void> _onClipboardData(Map<String, dynamic> json) async {
     _clearOpTimer();
+    _stopProgressTracking();
     final contentType = json['content_type'] as String? ?? 'error';
 
     if (contentType == 'error') {
@@ -526,7 +557,7 @@ class AppState extends ChangeNotifier {
   @override
   void dispose() {
     _opTimer?.cancel();
-    _scanTimeout?.cancel();
+    _progressSub?.cancel();
     _discovery.dispose();
     _socket?.dispose();
     _responseSub?.cancel();

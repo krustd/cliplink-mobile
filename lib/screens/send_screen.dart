@@ -196,6 +196,7 @@ class _SendScreenState extends State<SendScreen> {
                   return _ClipboardStatusChip(
                     status: state.clipboardStatus,
                     message: state.clipboardMessage,
+                    progress: state.clipboardProgress,
                   );
                 }
                 return _StatusChip(
@@ -371,8 +372,13 @@ class _StatusChip extends StatelessWidget {
 class _ClipboardStatusChip extends StatelessWidget {
   final ClipboardFetchStatus status;
   final String message;
+  final double progress;
 
-  const _ClipboardStatusChip({required this.status, required this.message});
+  const _ClipboardStatusChip({
+    required this.status,
+    required this.message,
+    this.progress = -1,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -388,6 +394,8 @@ class _ClipboardStatusChip extends StatelessWidget {
       _ => (Colors.grey.shade100, Colors.grey.shade600, Icons.info_rounded),
     };
 
+    final showProgress = progress >= 0 && status == ClipboardFetchStatus.fetching;
+
     return AnimatedContainer(
       duration: const Duration(milliseconds: 250),
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
@@ -396,27 +404,45 @@ class _ClipboardStatusChip extends StatelessWidget {
         borderRadius: BorderRadius.circular(12),
         border: Border.all(color: fgColor.withAlpha(50)),
       ),
-      child: Row(
+      child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          status == ClipboardFetchStatus.querying || status == ClipboardFetchStatus.fetching
-              ? const SizedBox(
-                  width: 18,
-                  height: 18,
-                  child: CircularProgressIndicator(strokeWidth: 2),
-                )
-              : Icon(icon, color: fgColor, size: 18),
-          const SizedBox(width: 8),
-          Flexible(
-            child: Text(
-              message,
-              style: TextStyle(
-                color: fgColor,
-                fontSize: 13,
-                fontWeight: FontWeight.w500,
+          Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              status == ClipboardFetchStatus.querying ||
+                      (status == ClipboardFetchStatus.fetching && !showProgress)
+                  ? const SizedBox(
+                      width: 18,
+                      height: 18,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : Icon(icon, color: fgColor, size: 18),
+              const SizedBox(width: 8),
+              Flexible(
+                child: Text(
+                  showProgress ? '${(progress * 100).toStringAsFixed(0)}%' : message,
+                  style: TextStyle(
+                    color: fgColor,
+                    fontSize: 13,
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          if (showProgress) ...[
+            const SizedBox(height: 8),
+            ClipRRect(
+              borderRadius: BorderRadius.circular(4),
+              child: LinearProgressIndicator(
+                value: progress,
+                minHeight: 4,
+                backgroundColor: fgColor.withAlpha(30),
+                valueColor: AlwaysStoppedAnimation<Color>(fgColor),
               ),
             ),
-          ),
+          ],
         ],
       ),
     );
